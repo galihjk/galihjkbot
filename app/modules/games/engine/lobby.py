@@ -37,8 +37,9 @@ def render_ready_check_text(
     remaining_seconds: int,
 ) -> str:
     lines = [
-        f"🎮 {metadata.name.upper()}",
         "PERMAINAN AKAN SEGERA DIMULAI!",
+        "",
+        f"🎮 {metadata.name.upper()}",
         "",
         "Sudah siap??",
         f"Klik tombol ✅Siap dalam {max(remaining_seconds, 0)} detik!",

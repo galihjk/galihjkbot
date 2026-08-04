@@ -198,21 +198,35 @@ Konsekuensi: langsung tereliminasi, tidak ikut ronde berikutnya, tetap tercatat 
 
 > 💤 Deni tidak melakukan apa pun sampai musik berhenti. Ia resmi berubah dari pemain menjadi dekorasi ruangan.
 
-## 19. Hukuman Skor AFK
+## 19. Hukuman Skor AFK (penalti parsial, bukan hangus total)
+
+AFK tetap dihukum, tapi **tidak lagi menghanguskan seluruh skor sesi** (revisi dari aturan awal — lihat diskusi di `development-history.md`). Formulanya:
 
 ```
-skor_sesi = 0
-skor_partisipasi = 0
-eligible_global_score = false
+skor_hasil_afk       = 0                                   # dipaksa 0, TIDAK ikut tabel §27 (beda dari eliminasi normal)
+skor_partisipasi_afk = 0                                   # tetap 0, sama seperti aturan lama (§28)
+skor_ketahanan_afk   = 5 × jumlah_ronde_yang_dilewati       # TETAP dihitung normal, TIDAK dihanguskan
+
+penalty_afk   = 10 + 0,5 × (skor_hasil_afk + skor_ketahanan_afk)
+skor_sesi_afk = (10 + skor_hasil_afk + skor_ketahanan_afk) − penalty_afk
+              = 0,5 × skor_ketahanan_afk        # karena skor_hasil_afk selalu 0
+
+skor_akhir_afk = skor_sesi_afk × faktor_jumlah_pemain (§30, sama seperti pemain normal)
 ```
 
-**Seluruh skor yang sudah terkumpul selama sesi itu hangus** kalau pemain jadi AFK kapan pun selama permainan (bukan cuma di ronde AFK-nya). Alasan: mencegah pemain "numpang tempat" tanpa benar-benar berpartisipasi, dan sistem skor global harus menghargai pemain yang benar-benar aktif.
+Intinya: pemain yang AFK tetap membawa pulang **separuh skor ketahanan** yang sudah didapat sebelum AFK (dikali faktor jumlah pemain seperti biasa), kehilangan skor hasil sepenuhnya, dan skor partisipasi tetap 0 (memang sudah begitu dari definisi AFK). Nilai ini **tidak pernah negatif** (skor ketahanan minimal 0).
+
+Contoh AFK di ronde 1 (belum lewat ronde apa pun, skor ketahanan = 0): `penalty_afk = 10 + 0,5×(0+0) = 10`, `skor_sesi_afk = 10 − 10 = 0`. Contoh AFK setelah lewat 4 ronde (skor ketahanan = 20): `penalty_afk = 10 + 0,5×(0+20) = 20`, `skor_sesi_afk = 30 − 20 = 10`.
+
+Alasan aturan ini tetap sama seperti sebelumnya — mencegah pemain "numpang tempat" tanpa benar-benar berpartisipasi — tapi sekarang **proporsional** terhadap seberapa jauh pemain sempat bertahan, bukan pukul-rata nol untuk semua orang termasuk yang cuma kena gangguan jaringan sesaat.
+
+**Pesan hasil akhir wajib menyebutkan angka penalti**, bukan cuma label "AFK" (lihat §45 untuk contoh format lengkap):
 
 ```
 🥇 Andi — 120 poin
 🥈 Budi — 80 poin
 🥉 Citra — 55 poin
-💤 Deni — AFK, 0 poin
+💤 Deni — AFK setelah lewat 4 ronde, kena penalti 20 poin, skor akhir 10 poin
 ```
 
 ## 20. Eliminasi Normal
@@ -271,10 +285,12 @@ Durasi main **tidak** dipakai sebagai basis skor (mudah dieksploitasi, durasi an
 | Juara 3 | 25 |
 | Lainnya | 10 |
 
+**Kalau pemain AFK**: skor hasil dipaksa **0**, TIDAK ikut tabel di atas — beda dari eliminasi normal (`NO_SEAT`/`LOST_CONTEST`/`TIME_EXPIRED`) yang tetap dapat baris yang sesuai (minimal 10 untuk "Lainnya"). Lihat §19 untuk skema penalti AFK lengkap.
+
 ## 28. Skor Partisipasi
 
 - Minimal 1 aksi valid → **10 poin**.
-- AFK → **0 poin**.
+- AFK → **0 poin** (skor hasil dan ketahanan AFK diatur terpisah, lihat §19 — bukan berarti skor sesi otomatis 0).
 - Diberikan setelah permainan selesai (bukan real-time).
 
 ## 29. Skor Ketahanan
@@ -293,7 +309,7 @@ Contoh: skor_hasil 60 + partisipasi 10 + ketahanan 30 = 100, dengan 8 pemain (fa
 
 ## 31. Penanganan Skor AFK (lagi)
 
-`skor_akhir = 0` kalau AFK kapan pun. Skor global **baru diperbarui setelah game selesai** (bukan per-ronde) — mencegah skor "kepalang masuk" sebelum sesi selesai, rollback rumit, exploit keluar-setelah-dapat-skor, dan inkonsistensi leaderboard.
+Skor akhir pemain AFK dihitung pakai formula penalti di §19 (**bukan** otomatis 0). Skor global **baru diperbarui setelah game selesai** (bukan per-ronde) — mencegah skor "kepalang masuk" sebelum sesi selesai, rollback rumit, exploit keluar-setelah-dapat-skor, dan inkonsistensi leaderboard.
 
 ## 32. Statistik Pemain (per game, terpisah dari skor global)
 
@@ -312,7 +328,7 @@ Kursi Kosong
 
 - Minimal 3 pemain untuk skor global dihitung.
 - Satu akun Telegram = satu identitas pemain, tidak bisa join dobel.
-- Skor disimpan **setelah** game selesai; game yang dibatalkan tidak memberi skor apapun; AFK tidak dapat skor.
+- Skor disimpan **setelah** game selesai; game yang dibatalkan tidak memberi skor apapun; AFK dapat skor parsial sesuai formula penalti (§19), bukan dihanguskan total.
 - Callback lama tidak bisa dihitung ulang; setiap sesi ID unik; transaksi skor hanya dijalankan **sekali**, ditandai lewat `score_committed_at` — kalau sudah terisi, tidak boleh diproses ulang.
 
 ## 34. Race Condition & Locking
@@ -440,12 +456,11 @@ Versi awal **tidak perlu**: taruhan, item, achievement.
 
 1. Ronde selesai, tersisa 1 pemain aktif
 2. Pemain itu → `WINNER`
-3. Hitung skor final semua pemain
-4. Pemain AFK → skor 0
-5. Transaksi skor global
-6. Catat `score_committed_at`
-7. Tampilkan hasil akhir
-8. Game → `FINISHED`
+3. Hitung skor final semua pemain (pemain AFK pakai formula penalti §19, bukan otomatis 0)
+4. Transaksi skor global
+5. Catat `score_committed_at`
+6. Tampilkan hasil akhir (termasuk angka penalti eksplisit untuk pemain yang AFK)
+7. Game → `FINISHED`
 
 ```
 🏆 HASIL AKHIR KURSI KOSONG
@@ -453,7 +468,7 @@ Versi awal **tidak perlu**: taruhan, item, achievement.
 🥈 Budi — 78 poin
 🥉 Citra — 52 poin
 4. Deni — 32 poin
-💤 Eko — AFK, 0 poin
+💤 Eko — AFK di ronde 1, kena penalti 10 poin, skor akhir 0 poin
 
 Terima kasih sudah bermain. Kursi boleh habis, persahabatan semoga tidak.
 ```
@@ -471,7 +486,8 @@ other_click_weight = 1.00
 chairs_per_row = 2
 participation_score = 10
 survival_score_per_round = 5
-afk_score = 0
+afk_penalty_base = 10        # komponen flat penalti AFK (setara skor partisipasi yang hilang)
+afk_penalty_ratio = 0.5      # porsi skor hasil+ketahanan yang tetap hangus saat AFK (lihat §19)
 max_edit_retry = 3
 ```
 

@@ -1,0 +1,12 @@
+.venv/
+__pycache__/
+*.pyc
+
+.env
+data/
+logs/
+*.db
+
+# Dokumen sumber (blueprint, game design doc) -- referensi internal saja,
+# sudah ditranskrip/dirangkum ke docs/, tidak perlu masuk repo.
+archive/

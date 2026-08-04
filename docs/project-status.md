@@ -4,7 +4,7 @@
 
 ## Ringkasan super singkat
 
-Bot Telegram jalan, bisa di-`python -m app.main` dari Windows dev. Fondasi (Fase 1-3 blueprint) **selesai** dan sudah dikeraskan (global error handler + recovery restart). Game pertama yang sesungguhnya (**Kursi Kosong**) **belum satu baris kode pun** — baru desain + rencana implementasi. Belum pernah dicoba jalan di Termux/Android TV Box sama sekali (Fase 5 blueprint nol persen).
+Bot Telegram jalan, bisa di-`python -m app.main` dari Windows dev. Fondasi (Fase 1-3 blueprint) **selesai** dan sudah dikeraskan (global error handler + recovery restart). Game pertama yang sesungguhnya (**Kursi Kosong**) **belum ada kode game-nya** — tapi **Tahap 0** (fondasi engine yang jadi prasyarat) **sudah selesai**: timer dalam-game generik multi-slot + status `AFK`. Tahap 1 (lobby → ronde dasar Kursi Kosong) belum dimulai. Belum pernah dicoba jalan di Termux/Android TV Box sama sekali (Fase 5 blueprint nol persen).
 
 ## Yang SUDAH jalan
 
@@ -19,28 +19,29 @@ Bot Telegram jalan, bisa di-`python -m app.main` dari Windows dev. Fondasi (Fase
 | Game engine generik (lobby, ready-check, timer, lock) | ✅ | `app/modules/games/engine/` — lihat `game-development-guide.md` untuk kontrak lengkap |
 | Alur lobby: auto-join pembuat, Extend tanpa batas, ready-check (mention+Siap+kick) | ✅ | Menggantikan total mekanisme "countdown 5s" di blueprint asli |
 | Game "Test" (`simple_game`, dulu bernama "Kursi Kosong") | ✅ **frozen** | Cuma buat uji engine — kursi rebutan simpel, tanpa AFK/skor/contest-window. Disembunyikan di production |
+| Engine: timer dalam-game multi-slot per session | ✅ | `GameManager.schedule_timer(session_id, name, delay)`/`cancel_timer(...)`, key `turn:{id}:{name}` — beberapa timer independen per session (prasyarat contest-window Kursi Kosong). `schedule_turn_timeout`/`cancel_turn_timeout` lama jadi wrapper (`name="round"`), `simple_game` tidak berubah. `TimerRegistry.cancel_session()` diperbaiki supaya cocok key 3-bagian |
+| Status pemain `AFK` (`GamePlayerStatus`) | ✅ | Baru value enum, belum ada game yang pakai (menunggu Kursi Kosong Tahap 3) |
 | Command `/game`, `/games`, `/gamestatus`, `/cancelgame` | ✅ | |
 | Global error handler | ✅ | `app/bot/error_handler.py` — reference code ke user, notif ke superadmin, log ke `logs/error.log` |
 | Recovery setelah restart | ✅ (versi tahap awal) | LOBBY/STARTING dipulihkan penuh; RUNNING di-ABORT (bukan resume mid-round — sesuai kebijakan blueprint utk versi awal) |
+| Git repository | ✅ | Remote `origin` → `github.com/galihjk/galihjkbot.git`, branch `main`. Riwayat SEBELUM titik ini tidak ada di git, cuma di `development-history.md` |
 | Pesan ramah (minta maaf, mention, ajakan main lagi) | ✅ | Di semua jalur cancel/finish game |
 
 ## Yang BELUM dikerjakan (urut kira-kira sesuai kebutuhan)
 
 | Area | Status | Kenapa penting |
 |---|---|---|
-| **Kursi Kosong (game pertama sesungguhnya)** | ❌ 0% kode | Desain & rencana sudah lengkap di `game-design-kursi-kosong.md` + `kursi-kosong-implementation-plan.md`. **Ini kandidat kerja selanjutnya yang paling jelas.** |
-| Engine: multi-timer per session | ❌ | Prasyarat Kursi Kosong (jendela rebutan kursi 1,2 detik per kursi, bisa >1 kursi diperebutkan bersamaan) — lihat `game-development-guide.md` §7 |
-| Engine: sistem skor/leaderboard lintas-game | ❌ | Prasyarat Kursi Kosong (skor hasil+partisipasi+ketahanan, digabung skor global). Rekomendasi desain ada di `game-development-guide.md` §15 — belum ada migration/kode |
+| **Kursi Kosong (game pertama sesungguhnya)** | ❌ 0% kode game | Tahap 0 (prasyarat engine) sudah selesai — lihat tabel "SUDAH jalan" di atas. **Tahap 1 (lobby → ronde dasar) adalah kandidat kerja selanjutnya yang paling jelas**, ikuti `kursi-kosong-implementation-plan.md` |
+| Engine: sistem skor/leaderboard lintas-game | ❌ | Prasyarat Tahap 4 Kursi Kosong (skor hasil+partisipasi+ketahanan, digabung skor global). Bentuk tabel `user_game_scores` & hook `calculate_scores()` sudah disepakati (`game-development-guide.md` §15, `kursi-kosong-implementation-plan.md` Tahap 0.4) — belum ada migration/kode, sengaja ditunda sampai Tahap 4 |
 | Admin: `/activegames`, `/gamesessions`, `/gameinfo`, `/admincancelgame` | ❌ | Blueprint §21.6-21.7 — monitoring game lintas SEMUA grup dari dashboard admin (sekarang cuma bisa lihat per-grup lewat `/gamestatus` di grup itu sendiri) |
 | Admin: `/errors` command, tabel `system_metrics`/`audit_logs` | ❌ | Blueprint §21.9, §16.9-16.10 — error sekarang cuma ke `logs/error.log` + Telegram, belum ada agregasi historis |
 | Feature registry (§6 blueprint) | ❌ | On/off fitur per grup dari database — belum relevan selama cuma modul `games` yang aktif |
 | **Deployment Termux (Fase 5 blueprint)** | ❌ 0% | Belum ada `scripts/install-termux.sh`, service runit, backup/restore script. **Belum pernah dicoba jalan di luar Windows dev sama sekali.** |
 | Fase 6 (autoreply, helpdesk, game kedua, dst) | ❌ | Belum mulai, nunggu Kursi Kosong selesai dulu secara wajar |
-| Git repository | ❌ | Project ini **belum** `git init` — semua riwayat cuma ada di percakapan/dokumen, bukan di commit |
 
 ## Langkah selanjutnya yang paling jelas
 
-Ikuti **Tahap 0** di [`kursi-kosong-implementation-plan.md`](kursi-kosong-implementation-plan.md) — pekerjaan fondasi engine (generalisasi timer, tambah status `AFK`, putuskan skema skor) sebelum mulai kode Kursi Kosong itu sendiri. Baca `game-development-guide.md` §6-7 dan §15 dulu untuk paham kenapa tahap ini perlu.
+Tahap 0 sudah selesai (timer multi-slot + status `AFK`, diverifikasi lewat integration test nyata — lihat `development-history.md`). Lanjut ke **Tahap 1** di [`kursi-kosong-implementation-plan.md`](kursi-kosong-implementation-plan.md): lobby → ronde dasar Kursi Kosong (kursi masih first-click-wins, belum ada contest window 1,2 detik — itu Tahap 2).
 
 Alternatif kalau mau ganti arah dulu: lihat opsi lain di `project-status.md` versi sebelumnya / tanya user preferensi (deployment Termux vs monitoring admin vs Kursi Kosong) — tiga-tiganya independen, bisa dikerjakan urutan berapapun.
 

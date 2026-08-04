@@ -43,6 +43,7 @@ class GamePlayerStatus(str, Enum):
     ACTIVE = "active"
     LEFT = "left"
     ELIMINATED = "eliminated"
+    AFK = "afk"
     WINNER = "winner"
     DISQUALIFIED = "disqualified"
 

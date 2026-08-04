@@ -105,3 +105,26 @@ Setelah sistem lobby jalan, user minta kata-kata lebih ramah: minta maaf + menti
 Ditulis jadi rencana implementasi 6 tahap di `kursi-kosong-implementation-plan.md` (Tahap 0 = kerjakan gap-gap di atas dulu, sebelum kode Kursi Kosong itu sendiri). **Belum ada satu baris kode Kursi Kosong yang ditulis** — sengaja, sesuai permintaan user ("jangan langsung membuat game kursi kosong").
 
 **File sumber diarsipkan**: `Blueprint.docx` dan `GAME DESIGN - Kursi Kosong.docx` dipindah ke `archive/` (gitignored) setelah ditranskrip lengkap ke `docs/blueprint.md` dan `docs/game-design-kursi-kosong.md` — supaya `archive/` tidak perlu dibuka lagi.
+
+---
+
+## Wrap-up sesi & setup git
+
+Ditutup dengan dokumentasi handoff: `README.md`, `docs/project-status.md`, `docs/development-history.md` (dokumen ini) dibuat supaya sesi/percakapan baru bisa lanjut tanpa baca ulang seluruh kode. Memory Claude Code juga diisi dengan ringkasan status + pelajaran penting (verifikasi lewat test nyata, jangan asumsikan scope luas dari instruksi ambigu).
+
+User men-setup git sendiri (`git init`, commit pertama, remote `origin` → `github.com/galihjk/galihjkbot.git`, push ke `main`). Diverifikasi: `.env` dan folder `data/`/`logs/`/`archive/`/`.venv/` tidak ikut tertrack (sesuai `.gitignore` yang sudah disiapkan sebelumnya). 111 file masuk commit pertama. Histori SEBELUM titik ini (semua yang tercatat di dokumen ini) tidak ada di `git log` — cuma tercatat manual di sini.
+
+---
+
+## Kursi Kosong Tahap 0 — fondasi engine (multi-timer + `AFK`)
+
+**Dibangun** (murni `engine/`, tidak menyentuh game "Test" ataupun kode Kursi Kosong): `GameManager.schedule_timer(session_id, name, delay)`/`cancel_timer(session_id, name)`, key `turn:{session_id}:{name}` — mengizinkan beberapa timer dalam-game jalan bersamaan per session (prasyarat jendela kontes kursi 1,2 detik per kursi di Kursi Kosong, yang bisa >1 kursi diperebutkan sekaligus dalam satu ronde). `schedule_turn_timeout`/`cancel_turn_timeout` lama jadi wrapper tipis (`name="round"`) supaya `simple_game` tidak perlu diubah sama sekali. Ditambah `GamePlayerStatus.AFK` (kolom `String`, tidak perlu migration).
+
+**Bug yang sudah ketahuan sejak studi desain, diperbaiki di sini**: `TimerRegistry.cancel_session()` mem-parsing key timer dengan `key.partition(":")` lalu membandingkan bagian kedua PERSIS dengan `str(session_id)` — begitu key berubah jadi 3-bagian (`turn:5:chair-3`), bagian keduanya adalah `"5:chair-3"`, tidak akan pernah cocok dengan `"5"`, jadi timer per-kursi tidak akan ikut ter-cancel saat sesi dibatalkan/selesai (kebocoran timer). Diperbaiki dengan cek `rest == str(session_id) or rest.startswith(f"{session_id}:")` — cocok untuk key 2-bagian lama maupun 3-bagian baru.
+
+**Diverifikasi lewat 3 integration test ad-hoc** (SQLite file asli, `FakeBot`, `asyncio.gather` untuk konkurensi — pola standar project ini, ditulis di scratchpad lalu dibuang setelah lolos, tidak masuk repo karena belum ada test suite formal):
+1. `TimerRegistry` murni: dua timer beda `name` di session sama, dijadwalkan bersamaan, tetap jalan independen (tidak saling cancel seperti sebelum perbaikan); `cancel_session()` membatalkan keduanya sekaligus.
+2. Lewat `GameManager` sungguhan (real DB session + FakeBot): `schedule_timer` dua nama berbeda pada session RUNNING yang sama, keduanya memicu `handle_timeout` dengan `timer_key` yang BISA dibedakan; `cancel_timer` satu nama tidak ikut membatalkan nama lain.
+3. **Regresi penuh game "Test"** (3 pemain: lobby → join → ready-check → ronde dengan 2 pemain klik kursi yang SAMA lewat `asyncio.gather`, tepat 1 yang menang → ronde final → `FINISHED` dengan pemenang benar) — lolos tanpa perubahan perilaku, membuktikan wrapper `schedule_turn_timeout`/`cancel_turn_timeout` tidak mengubah apapun dari sudut pandang game yang sudah ada.
+
+Item lain di Tahap 0 (konvensi validasi round di callback, skema tabel `user_game_scores`) sengaja **tidak diimplementasikan** di titik ini — cuma keputusan desain yang sudah disepakati di `kursi-kosong-implementation-plan.md`, kodenya menyusul di Tahap 1 dan Tahap 4. Tahap 1 (lobby → ronde dasar Kursi Kosong, kursi masih first-click-wins) adalah pekerjaan berikutnya.

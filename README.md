@@ -55,7 +55,7 @@ archive/        Blueprint.docx & GAME DESIGN docx asli (gitignored, sudah ditran
 
 ## Catatan Penting
 
-- **Bukan git repo** (belum di-`git init`) — riwayat perubahan cuma ada di `docs/development-history.md`, bukan di `git log`.
+- **Git repo aktif**, remote `origin` → `github.com/galihjk/galihjkbot.git` (branch `main`). Histori keputusan/bug tetap ada di `docs/development-history.md` karena `git log` cuma mulai dari commit pertama (belum mencakup riwayat sebelum git di-setup).
 - **Python 3.10** di `.venv` (bukan 3.11+) — jangan pakai `enum.StrEnum`, pakai `class X(str, Enum)`.
 - Database `data/bot.db` — **jangan pindah ke shared storage** kalau nanti deploy ke Termux (WAL mode butuh filesystem lokal, lihat `blueprint.md` §28 & histori diskusi soal ini).
 - Belum ada test suite formal — verifikasi selama ini pakai integration test ad-hoc (SQLite file asli + `FakeBot` + `asyncio.gather` untuk uji konkurensi), ditulis di scratchpad, tidak disimpan di repo. Pola contohnya ada di `docs/game-development-guide.md` §12.

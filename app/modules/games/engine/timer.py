@@ -47,7 +47,9 @@ class TimerRegistry:
 
     def cancel_session(self, session_id: int) -> None:
         kinds = ("lobby", "starting", "turn", "game")
+        exact = str(session_id)
+        scoped_prefix = f"{session_id}:"
         for key in list(self._tasks):
-            kind, _, sid = key.partition(":")
-            if kind in kinds and sid == str(session_id):
+            kind, _, rest = key.partition(":")
+            if kind in kinds and (rest == exact or rest.startswith(scoped_prefix)):
                 self.cancel(key)

@@ -8,7 +8,7 @@ Dasar: [`game-design-kursi-kosong.md`](game-design-kursi-kosong.md) (spesifikasi
 
 ---
 
-## Tahap 0 — Pekerjaan fondasi engine (prasyarat, generik, bukan kode Kursi Kosong)
+## Tahap 0 — Pekerjaan fondasi engine (prasyarat, generik, bukan kode Kursi Kosong) — ✅ SELESAI (2026-08-04)
 
 Tanpa ini, mekanik inti Kursi Kosong (rebutan kursi + skor) tidak bisa dibangun dengan benar. Semua di tahap ini murni perubahan `engine/`, bisa diuji terpisah tanpa Kursi Kosong sama sekali (misal pakai game "Test" yang sudah ada, atau test unit langsung).
 
@@ -33,6 +33,8 @@ Tanpa ini, mekanik inti Kursi Kosong (rebutan kursi + skor) tidak bisa dibangun 
    - **Belum perlu dibuat sekarang** — cukup disepakati bentuknya. Migration & implementasi nyata baru di Tahap 4.
 
 **Definition of done Tahap 0:** compile bersih, test timer multi-slot lolos, game "Test" tetap berjalan normal tanpa regresi (jalankan ulang test lama di riwayat pengembangan).
+
+**Status implementasi:** item 1 (multi-timer) dan 2 (`AFK`) sudah dikerjakan — lihat `app/modules/games/engine/timer.py` (`cancel_session()`), `app/modules/games/engine/manager.py` (`schedule_timer`/`cancel_timer`), `app/core/enums.py` (`GamePlayerStatus.AFK`). Item 3 (konvensi validasi round) dan 4 (skema skor `user_game_scores`) sengaja **belum dikodekan** — cuma keputusan desain, baru diimplementasikan nyata masing-masing di Tahap 1 dan Tahap 4 sesuai rencana ini. Diverifikasi lewat 3 integration test ad-hoc (TimerRegistry multi-slot, GameManager.schedule_timer/cancel_timer end-to-end, regresi penuh simple_game termasuk rebutan kursi bersamaan via `asyncio.gather`) — detail di `development-history.md`.
 
 ---
 

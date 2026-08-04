@@ -408,13 +408,21 @@ class GameManager:
             await game.handle_message(context, message)
             await db_session.commit()
 
-    def schedule_turn_timeout(self, session_id: int, delay_seconds: float) -> None:
+    def schedule_timer(self, session_id: int, name: str, delay_seconds: float) -> None:
         self._timers.schedule(
-            f"turn:{session_id}", delay_seconds, self._make_turn_timeout_runner(session_id)
+            f"turn:{session_id}:{name}",
+            delay_seconds,
+            self._make_timer_runner(session_id, name),
         )
 
+    def cancel_timer(self, session_id: int, name: str) -> None:
+        self._timers.cancel(f"turn:{session_id}:{name}")
+
+    def schedule_turn_timeout(self, session_id: int, delay_seconds: float) -> None:
+        self.schedule_timer(session_id, "round", delay_seconds)
+
     def cancel_turn_timeout(self, session_id: int) -> None:
-        self._timers.cancel(f"turn:{session_id}")
+        self.cancel_timer(session_id, "round")
 
     async def finish_game(self, context: GameContext, result) -> None:  # noqa: ANN001
         game_session = context.game_session
@@ -792,7 +800,9 @@ class GameManager:
 
                 await self.start_game(db_session, session_id=session_id)
 
-    def _make_turn_timeout_runner(self, session_id: int):
+    def _make_timer_runner(self, session_id: int, name: str):
+        timer_key = f"turn:{session_id}:{name}"
+
         async def _runner() -> None:
             lock = self._locks.get(session_id)
             async with lock:
@@ -807,7 +817,7 @@ class GameManager:
                         return
                     game = self._registry.get(game_session.game_key)
                     context = await self._build_context(db_session, game_session)
-                    await game.handle_timeout(context, f"turn:{session_id}")
+                    await game.handle_timeout(context, timer_key)
                     await db_session.commit()
 
         return _runner

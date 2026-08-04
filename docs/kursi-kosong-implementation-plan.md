@@ -38,7 +38,7 @@ Tanpa ini, mekanik inti Kursi Kosong (rebutan kursi + skor) tidak bisa dibangun 
 
 ---
 
-## Tahap 1 — Lobby → ronde dasar (happy path, tanpa rebutan kompleks)
+## Tahap 1 — Lobby → ronde dasar (happy path, tanpa rebutan kompleks) — ✅ SELESAI (2026-08-04)
 
 Tujuan: satu game Kursi Kosong bisa dimainkan sampai selesai, TAPI kursi masih first-click-wins sederhana (belum ada jendela rebutan 1.200ms + bobot). Ini sengaja supaya siklus lobby→ready-check→ronde→selesai (yang sudah generik dari engine) langsung terpasang dan teruji lebih dulu, sebelum menambah kerumitan rebutan.
 
@@ -51,6 +51,8 @@ Tujuan: satu game Kursi Kosong bisa dimainkan sampai selesai, TAPI kursi masih f
 7. Daftarkan di `create_game_registry()` — tanpa syarat environment (game sungguhan, tidak disembunyikan).
 
 **Definition of done:** test integration ala yang sudah dipakai untuk `simple_game` (FakeBot + SQLite file asli + `asyncio.gather` untuk klik bersamaan) — game 3-8 pemain bisa jalan dari lobby sampai ada pemenang. Callback dari ronde lama terbukti ditolak (test khusus untuk ini, karena ini bug yang secara sadar sedang diperbaiki).
+
+**Status implementasi:** selesai, di `app/modules/games/implementations/kursi_kosong/` (`metadata.py`, `state.py`, `keyboards.py`, `texts.py`, `game.py`), didaftarkan tanpa syarat environment di `bootstrap.py::create_game_registry()`. Keyboard menampilkan SEMUA kursi (bukan cuma yang kosong seperti `simple_game`) dengan nama pemain yang sudah duduk, di-refresh live (`edit_message_reply_markup`) tiap ada yang berhasil klaim kursi — sesuai desain §7. Validasi nomor ronde ada dari awal di `handle_callback` (format `data` pakai separator `"-"`, BUKAN `":"` — lihat gotcha baru di `game-development-guide.md` §6: `CallbackData.pack()` aiogram sendiri memakai `":"` sebagai separator field, jadi tidak bisa dipakai di dalam nilai `data`). Diverifikasi lewat integration test ad-hoc: 3 pemain DAN 8 pemain (maksimum), rebutan kursi bersamaan via `asyncio.gather` (tepat 1 menang), callback ronde lama terbukti ditolak, sampai `FINISHED` dengan pemenang benar — detail di `development-history.md`.
 
 ---
 

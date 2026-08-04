@@ -243,7 +243,7 @@ Kalau game kamu punya banyak ronde berurutan (kirim pesan tombol baru tiap ronde
 ```python
 async def handle_callback(self, context: GameContext, callback) -> None:
     parsed = GameCallback.unpack(callback.data)
-    round_number_str, action_data = parsed.data.split(":", 1)
+    round_number_str, action_data = parsed.data.split("-", 1)
 
     state = context.game_session.state_json
     if int(round_number_str) != state["round"]:
@@ -252,7 +252,11 @@ async def handle_callback(self, context: GameContext, callback) -> None:
     ...
 ```
 
-Ini akan diperbaiki sekaligus saat implementasi Kursi Kosong (lihat rencana implementasi) — kalau kamu bikin game round-based SEBELUM itu selesai, jangan tiru bug ini dari `simple_game`, tambahkan validasi round sendiri.
+Ini sudah diimplementasikan nyata di `implementations/kursi_kosong/game.py` (Tahap 1) — jadi contoh acuan langsung sekarang bukan cuma `simple_game`.
+
+### ⚠️ GOTCHA: jangan pakai `":"` sebagai separator DI DALAM `data`
+
+Ketahuan saat implementasi Kursi Kosong Tahap 1: `GameCallback.pack()` (dari `CallbackData` bawaan aiogram) memakai `":"` sendiri untuk memisahkan field (`session_id`, `data`). Kalau isi `data` juga mengandung `":"` (misal `data=f"{round_number}:{chair_number}"`), `pack()` langsung melempar `ValueError: Separator symbol ':' can not be used in value`. **Pakai karakter lain** (project ini pakai `"-"`) untuk memisahkan sub-bagian di dalam `data`, lalu `.split("-", 1)` seperti contoh di atas.
 
 ---
 

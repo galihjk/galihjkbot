@@ -16,6 +16,7 @@ from app.modules.common.router import get_router as get_common_router
 from app.modules.devtools.router import get_router as get_devtools_router
 from app.modules.games.engine.manager import GameManager
 from app.modules.games.engine.registry import GameRegistry
+from app.modules.games.implementations.kursi_kosong.game import KursiKosongGame
 from app.modules.games.implementations.simple_game.game import SimpleGame
 from app.modules.games.router import get_router as get_games_router
 
@@ -26,6 +27,7 @@ def create_game_registry(settings: Settings) -> GameRegistry:
     # muncul di /games atau bisa dipanggil lewat /game.
     if settings.app_env != "production":
         registry.register(SimpleGame())
+    registry.register(KursiKosongGame())
     return registry
 
 

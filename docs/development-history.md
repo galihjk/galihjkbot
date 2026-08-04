@@ -128,3 +128,21 @@ User men-setup git sendiri (`git init`, commit pertama, remote `origin` → `git
 3. **Regresi penuh game "Test"** (3 pemain: lobby → join → ready-check → ronde dengan 2 pemain klik kursi yang SAMA lewat `asyncio.gather`, tepat 1 yang menang → ronde final → `FINISHED` dengan pemenang benar) — lolos tanpa perubahan perilaku, membuktikan wrapper `schedule_turn_timeout`/`cancel_turn_timeout` tidak mengubah apapun dari sudut pandang game yang sudah ada.
 
 Item lain di Tahap 0 (konvensi validasi round di callback, skema tabel `user_game_scores`) sengaja **tidak diimplementasikan** di titik ini — cuma keputusan desain yang sudah disepakati di `kursi-kosong-implementation-plan.md`, kodenya menyusul di Tahap 1 dan Tahap 4. Tahap 1 (lobby → ronde dasar Kursi Kosong, kursi masih first-click-wins) adalah pekerjaan berikutnya.
+
+---
+
+## Kursi Kosong Tahap 1 — lobby → ronde dasar (kode game pertama, akhirnya)
+
+**Dibangun**: `app/modules/games/implementations/kursi_kosong/` — folder pertama yang benar-benar berisi kode Kursi Kosong (sebelumnya cuma desain+rencana). Mengikuti pola `simple_game` (lihat `game-development-guide.md`) tapi dengan dua beda sengaja:
+- **Validasi nomor ronde ada dari awal** di `handle_callback` — bukan bug yang dibiarkan seperti `simple_game`. `data` callback berisi `"{round_number}-{chair_number}"`, ditolak kalau `round_number` tidak cocok `state["round"]`.
+- **Keyboard menampilkan SEMUA kursi** (bukan cuma yang kosong seperti `simple_game`), dengan nama pemain yang sudah duduk (dipotong maks. 10 karakter), dan di-refresh LIVE (`bot.edit_message_reply_markup`) tiap kali ada yang berhasil klaim kursi — sesuai desain §7. Kursi masih first-click-wins (belum ada jendela kontes 1,2 detik, itu Tahap 2).
+
+**Bug baru ketahuan saat implementasi (bukan dari studi desain sebelumnya)**: contoh kode di `game-development-guide.md` §6 menyarankan encode `data` callback pakai separator `":"` (mis. `f"{round_number}:{action_data}"`). Ternyata `GameCallback.pack()` (dari `CallbackData` bawaan aiogram) **memakai `":"` sendiri** untuk memisahkan field (`session_id`, `data`) — kalau isi `data` juga mengandung `":"`, `pack()` langsung melempar `ValueError: Separator symbol ':' can not be used in value`. Baru ketahuan lewat test nyata (percobaan pertama `_begin_round` langsung crash), bukan dari baca kode. Diperbaiki dengan pakai `"-"` sebagai separator internal di dalam `data`, dan panduan (`game-development-guide.md` §6) diperbarui supaya game berikutnya tidak jatuh ke jebakan yang sama.
+
+**Diverifikasi lewat integration test ad-hoc** (SQLite file asli + FakeBot + `asyncio.gather`, scratchpad, tidak masuk repo): dijalankan untuk **3 pemain DAN 8 pemain** (batas maksimum, sekalian uji keyboard 2-kolom tidak error untuk kursi lebih banyak) —
+- lobby → join → ready-check → RUNNING,
+- rebutan kursi bersamaan (dua pemain klik kursi yang sama via `asyncio.gather`) → tepat 1 yang berhasil (aman secara konkurensi walau mekanismenya masih first-click-wins, berkat lock per-session yang sudah ada di engine),
+- callback dari ronde 1 ditolak setelah ronde maju ke ronde 2 (fitur baru yang sengaja ditambahkan, dites eksplisit — beda dari `simple_game` yang tidak punya proteksi ini),
+- main sampai ronde final → `FINISHED` dengan pemenang tunggal yang benar, ajakan main lagi terkirim otomatis.
+
+Item yang SENGAJA belum ada di Tahap 1 (menyusul di tahap berikutnya): jendela kontes/bobot rebutan (Tahap 2), status `AFK` beneran dipakai + narasi lengkap (Tahap 3), skor (Tahap 4), retry edit pesan & uji Telegram sungguhan (Tahap 5). Didaftarkan tanpa syarat environment di `bootstrap.py::create_game_registry()` — beda dari `simple_game` yang sengaja disembunyikan di production.

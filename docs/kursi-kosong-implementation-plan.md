@@ -139,14 +139,24 @@ Diverifikasi lewat integration test ad-hoc (SQLite file asli + `GameManager` sun
 
 ---
 
-## Tahap 5 — Ketahanan produksi & percobaan nyata
+## Tahap 5 — Ketahanan produksi & percobaan nyata — Bagian A-C ✅ SELESAI (2026-08-05), Bagian D menunggu user
 
-1. Retry edit pesan (desain §36-37): 3x percobaan (langsung, +500ms, +1.5s) sebelum jatuh ke kirim pesan baru.
-2. Uji recovery: bot restart di tengah `ROUND_ACTIVE`-nya Kursi Kosong (level engine kita: status `RUNNING`) — sesuai kebijakan blueprint tahap awal, tetap di-ABORT (bukan resume), pastikan pesan minta maaf spesifik Kursi Kosong (bukan generic) kalau memang diinginkan beda.
-3. Uji manual di Telegram pakai `/p1`.."/p7" (lihat `game-development-guide.md` §12) — minimal satu sesi penuh 3 pemain dan satu sesi 8 pemain (maksimum) untuk lihat tata letak tombol 2-kolom tidak berantakan.
-4. (Opsional, boleh terpisah dari plan ini) `/activegames`, `/gameinfo <session_id>` di admin dashboard — supaya bisa dipantau lintas grup, sesuai gap yang sudah dicatat di `game-development-guide.md` §13.
+1. **Retry edit pesan (desain §36-37) — ✅ selesai.** 3x percobaan (langsung, +500ms, +1,5s) sebelum jatuh ke kirim pesan baru.
+2. **Uji recovery restart — ✅ selesai** (jalur generik sudah ada sejak awal, kali ini dibuktikan lewat test khusus Kursi Kosong). Pesan minta maaf **tetap generic** (dikonfirmasi user, sudah cukup karena otomatis menyisipkan nama game).
+3. **Uji manual di Telegram pakai `/p1`.."/p7"** (lihat `game-development-guide.md` §14) — minimal satu sesi penuh 3 pemain dan satu sesi 8 pemain (maksimum) untuk lihat tata letak tombol 2-kolom tidak berantakan. **Belum dikerjakan** — ini butuh interaksi Telegram nyata dari user, tidak bisa diotomatisasi. Kode sudah siap diuji.
+4. **`/activegames`, `/gameinfo <session_id>` di admin dashboard — ✅ selesai** (awalnya opsional, dikonfirmasi user untuk dikerjakan sekarang juga, bukan ditunda).
 
-**Definition of done:** satu sesi lengkap dimainkan sungguhan di Telegram (bukan cuma test otomatis) dari lobby sampai ada pemenang, layar tombol & narasi terasa sesuai nada desain ("lucu, tidak spam").
+**Status implementasi Bagian A (retry edit pesan)**: helper baru `_edit_round_message_with_fallback()` di `kursi_kosong/game.py` — coba `edit_message_text` 3x (jeda `[0, 0.5, 1.5]` detik, tetap tahan flood control lewat `_call_with_retry` yang sudah ada), kalau tetap gagal kirim **pesan baru** (teks+keyboard sama), jadikan itu `state["round_message_id"]` yang otoritatif, naikkan `state["message_version"]` (bookkeeping/audit). Dipasang di 3 titik yang tadinya cuma log-lalu-diamkan kalau edit gagal: reveal keyboard di `_begin_round`, `_refresh_round_message` (update kursi/kontes), `_send_countdown_reminder`. `_close_round_message` (penutup ronde) SENGAJA tidak diubah — kegagalannya cuma kosmetik, validasi nomor ronde di `handle_callback` sudah menolak klik ke ronde yang sudah selesai apa pun pesannya.
+
+`handle_callback` menolak callback yang `message_id`-nya BUKAN `state["round_message_id"]` saat ini (pakai `STALE_ROUND_ALERT` yang sudah ada, tidak perlu alert baru) — ini penegakan §36 ("callback dari versi lama ditolak"), tapi **dengan perbandingan `round_message_id` langsung, bukan counter `message_version` terpisah** (satu pointer "pesan otoritatif" sudah cukup, `message_version` cuma bookkeeping). Perbandingan dibuat permisif (`getattr` berlapis) supaya tidak crash kalau callback tidak punya atribut `.message` sama sekali.
+
+**Status implementasi Bagian D**: menunggu user — lihat `project-status.md`.
+
+**Status implementasi Bagian C (admin monitoring)**: `app/modules/admin/handlers/games.py` (baru, pola PERSIS `groups.py` — `PrivateOnly()`, `IsAdmin()`, admin-only DM) — `/activegames` (lintas SEMUA grup, pakai `find_all_active` yang sudah ada, tidak perlu fungsi repo baru) dan `/gameinfo <session_id>` (detail satu sesi apa pun, termasuk yang sudah FINISHED — bukan cuma yang aktif). Presenter baru di `app/modules/admin/presenters.py`: `format_active_games_list` (tanpa paginasi — jumlah sesi aktif bersamaan selalu kecil), `format_game_info_detail`. Didaftarkan di `app/modules/admin/router.py::get_router()`.
+
+Diverifikasi lewat integration test ad-hoc (SQLite file asli): retry edit gagal 1-2x lalu berhasil (tidak fallback), gagal 3x berturut-turut (fallback terjadi, `message_version` naik, pesan lama ditolak/pesan baru diterima), callback tanpa `.message` tidak crash; `recover_sessions()` sungguhan pada sesi Kursi Kosong RUNNING nyata (1 kursi terklaim, timer aktif) → `ABORTED`, pesan menyebut nama game, grup bebas `/game` baru; `/activegames` lintas 2 grup (cuma sesi aktif, bukan yang FINISHED), `/gameinfo` untuk sesi aktif/selesai/tidak-ada/argumen-tidak-valid. Regresi PENUH semua test lama (Tahap 2/3/4/susulan-eliminasi/flood-cancel/force-start) dijalankan ulang — perlu sedikit penyesuaian: `FakeCallbackQuery` di semua file lama ditambah atribut `.message.message_id` (dan helper `click()` mengambilnya dari `round_message_id` state saat itu) supaya tidak keblokir validasi stale-message yang baru, tidak ada perubahan asersi/logic test lain yang diperlukan.
+
+**Definition of done Bagian A-C**: tercapai lewat test otomatis di atas. **Definition of done Bagian D** (satu sesi lengkap dimainkan sungguhan di Telegram dari lobby sampai ada pemenang) — belum tercapai, menunggu user.
 
 ---
 

@@ -55,6 +55,9 @@ def _save_state(context: GameContext, state: dict) -> None:
 # ini aman -- objek ORM tetap valid & bisa terus dimutasi sesudahnya.
 
 
+_EDIT_RETRY_DELAYS = (0, 0.5, 1.5)
+
+
 async def _call_with_retry(coro_factory, *, max_attempts: int = 3):
     """Jalankan `coro_factory()` (callable TANPA argumen, mengembalikan
     coroutine BARU tiap dipanggil supaya bisa diulang) -- otomatis tunggu &
@@ -76,6 +79,51 @@ async def _call_with_retry(coro_factory, *, max_attempts: int = 3):
                 exc.retry_after, attempt + 1, max_attempts,
             )
             await asyncio.sleep(exc.retry_after + 0.5)
+
+
+async def _edit_round_message_with_fallback(
+    context: GameContext, state: dict, text: str, reply_markup
+) -> None:
+    """Edit pesan ronde di tempat (desain §36-37): 3x percobaan (langsung,
+    +500ms, +1.500ms), tiap percobaan tetap tahan flood control lewat
+    `_call_with_retry`. Kalau ke-3 nya tetap gagal (bukan flood control --
+    itu sudah ditangani terpisah di tiap percobaan), keyboard yang basi
+    SELAMANYA lebih berbahaya daripada mengirim pesan baru: kirim pesan baru
+    berisi teks+keyboard yang sama, jadikan itu pesan ronde yang otoritatif
+    (`round_message_id` baru), naikkan `message_version` (bookkeeping/audit,
+    lihat `handle_callback` untuk penegakan penolakan pesan lama)."""
+    message_id = state.get("round_message_id")
+    last_exc: Exception | None = None
+    for delay in _EDIT_RETRY_DELAYS:
+        if delay:
+            await asyncio.sleep(delay)
+        try:
+            await _call_with_retry(
+                lambda: context.bot.edit_message_text(
+                    text,
+                    chat_id=context.telegram_chat_id,
+                    message_id=message_id,
+                    reply_markup=reply_markup,
+                )
+            )
+            return
+        except Exception as exc:  # noqa: BLE001 -- sengaja tangkap luas, lihat docstring
+            last_exc = exc
+
+    logger.warning(
+        "Edit pesan ronde gagal %s kali (session %s), kirim pesan baru sebagai "
+        "gantinya: %s",
+        len(_EDIT_RETRY_DELAYS), context.session_id, last_exc,
+    )
+    new_message = await _call_with_retry(
+        lambda: context.bot.send_message(
+            context.telegram_chat_id, text, reply_markup=reply_markup
+        )
+    )
+    state["round_message_id"] = new_message.message_id
+    state["message_version"] = state.get("message_version", 1) + 1
+    _save_state(context, state)
+    await context.db_session.commit()
 
 
 class KursiKosongGame(BaseGame):
@@ -108,6 +156,17 @@ class KursiKosongGame(BaseGame):
         # Wajib divalidasi dari awal (bukan bug simple_game, lihat
         # game-development-guide.md §6): callback dari ronde lama ditolak.
         if int(round_str) != state["round"]:
+            await callback.answer(texts.STALE_ROUND_ALERT, show_alert=True)
+            return
+
+        # Desain §36: kalau edit pesan ronde gagal berulang, bot terpaksa
+        # kirim pesan BARU sebagai pengganti (lihat `_edit_round_message_with_fallback`)
+        # -- pesan LAMA (nomor ronde-nya kebetulan masih sama, jadi tidak
+        # tertangkap validasi di atas) tidak lagi otoritatif, tombolnya harus
+        # ditolak supaya cuma ada satu sumber tombol yang valid per ronde.
+        current_message_id = state.get("round_message_id")
+        callback_message_id = getattr(getattr(callback, "message", None), "message_id", None)
+        if current_message_id is not None and callback_message_id != current_message_id:
             await callback.answer(texts.STALE_ROUND_ALERT, show_alert=True)
             return
 
@@ -262,7 +321,6 @@ class KursiKosongGame(BaseGame):
             p for p in context.active_players if p.user_id in state["alive_user_ids"]
         ]
         seat_total = game_state.seat_count(state)
-        players_by_id = {p.user_id: p.display_name for p in context.active_players}
         # §25 desain: tinggal 2 pemain/1 kursi -- ronde final, pakai flourish
         # pembuka khusus alih-alih header ronde biasa.
         is_final = len(state["alive_user_ids"]) == 2
@@ -290,30 +348,9 @@ class KursiKosongGame(BaseGame):
         # SETELAH kursi muncul, bukan dari saat teks ronde dikirim.
         await asyncio.sleep(random.uniform(SEAT_REVEAL_MIN_SECONDS, SEAT_REVEAL_MAX_SECONDS))
 
-        ready_text = texts.render_round_ready(
-            state["round"], players, seat_total, ROUND_TIMEOUT_SECONDS, is_final=is_final
-        )
-        keyboard = keyboards.build_seat_keyboard(
-            context.session_id,
-            state["round"],
-            seat_total,
-            state["seats"],
-            players_by_id,
-            state["contests"],
-        )
-        try:
-            await _call_with_retry(
-                lambda: context.bot.edit_message_text(
-                    ready_text,
-                    chat_id=context.telegram_chat_id,
-                    message_id=state["round_message_id"],
-                    reply_markup=keyboard,
-                )
-            )
-        except Exception:
-            logger.exception(
-                "Gagal memunculkan keyboard kursi, session %s", context.session_id
-            )
+        ready_text = self._render_ready_text(context, state)
+        keyboard = self._build_round_keyboard(context, state)
+        await _edit_round_message_with_fallback(context, state, ready_text, keyboard)
 
         # Titik ini = kursi/keyboard BENAR sudah bisa diklik -- dipakai
         # sebagai acuan "jendela keadilan" (MIN_ACTION_WINDOW_SECONDS) di
@@ -338,14 +375,29 @@ class KursiKosongGame(BaseGame):
                 context.session_id, "countdown:3", ROUND_TIMEOUT_SECONDS - 3
             )
 
-    async def _refresh_round_message(self, context: GameContext, state: dict) -> None:
-        message_id = state.get("round_message_id")
-        if message_id is None:
-            return
+    def _render_ready_text(
+        self, context: GameContext, state: dict, extra_note: str | None = None
+    ) -> str:
+        players = [
+            p for p in context.active_players if p.user_id in state["alive_user_ids"]
+        ]
+        seat_total = game_state.seat_count(state)
+        is_final = len(state["alive_user_ids"]) == 2
+        return texts.render_round_ready(
+            state["round"],
+            players,
+            seat_total,
+            ROUND_TIMEOUT_SECONDS,
+            is_final=is_final,
+            extra_note=extra_note,
+        )
 
+    def _build_round_keyboard(
+        self, context: GameContext, state: dict
+    ) -> InlineKeyboardMarkup:
         seat_total = game_state.seat_count(state)
         players_by_id = {p.user_id: p.display_name for p in context.active_players}
-        keyboard = keyboards.build_seat_keyboard(
+        return keyboards.build_seat_keyboard(
             context.session_id,
             state["round"],
             seat_total,
@@ -353,64 +405,28 @@ class KursiKosongGame(BaseGame):
             players_by_id,
             state["contests"],
         )
-        try:
-            await _call_with_retry(
-                lambda: context.bot.edit_message_reply_markup(
-                    chat_id=context.telegram_chat_id,
-                    message_id=message_id,
-                    reply_markup=keyboard,
-                )
-            )
-        except Exception:
-            logger.exception(
-                "Gagal memperbarui keyboard kursi, session %s", context.session_id
-            )
+
+    async def _refresh_round_message(self, context: GameContext, state: dict) -> None:
+        if state.get("round_message_id") is None:
+            return
+
+        text = self._render_ready_text(context, state)
+        keyboard = self._build_round_keyboard(context, state)
+        await _edit_round_message_with_fallback(context, state, text, keyboard)
 
     async def _send_countdown_reminder(self, context: GameContext, seconds_left: int) -> None:
         """Edit pesan ronde menjadi mengandung reminder countdown 5/3 detik
         (§24 desain) -- keyboard & sisa isi teks tetap mencerminkan state
         kursi/kontes TERKINI (bisa saja sudah berubah sejak ronde dimulai)."""
         state = context.game_session.state_json
-        message_id = state.get("round_message_id")
-        if message_id is None:
+        if state.get("round_message_id") is None:
             return
 
-        players = [
-            p for p in context.active_players if p.user_id in state["alive_user_ids"]
-        ]
-        seat_total = game_state.seat_count(state)
-        is_final = len(state["alive_user_ids"]) == 2
-        text = texts.render_round_ready(
-            state["round"],
-            players,
-            seat_total,
-            ROUND_TIMEOUT_SECONDS,
-            is_final=is_final,
-            extra_note=texts.COUNTDOWN_NOTES.get(seconds_left),
+        text = self._render_ready_text(
+            context, state, extra_note=texts.COUNTDOWN_NOTES.get(seconds_left)
         )
-        players_by_id = {p.user_id: p.display_name for p in context.active_players}
-        keyboard = keyboards.build_seat_keyboard(
-            context.session_id,
-            state["round"],
-            seat_total,
-            state["seats"],
-            players_by_id,
-            state["contests"],
-        )
-        try:
-            await _call_with_retry(
-                lambda: context.bot.edit_message_text(
-                    text,
-                    chat_id=context.telegram_chat_id,
-                    message_id=message_id,
-                    reply_markup=keyboard,
-                )
-            )
-        except Exception:
-            logger.exception(
-                "Gagal mengirim reminder countdown %s detik, session %s",
-                seconds_left, context.session_id,
-            )
+        keyboard = self._build_round_keyboard(context, state)
+        await _edit_round_message_with_fallback(context, state, text, keyboard)
 
     async def _resolve_contest(self, context: GameContext, seat_number: int) -> None:
         """Dipanggil saat timer jendela kontes (1,2 detik) sebuah kursi

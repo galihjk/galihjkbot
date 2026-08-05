@@ -12,6 +12,7 @@ def build_initial_state(alive_user_ids: list[int]) -> dict:
         "alive_user_ids": list(alive_user_ids),
         "seats": {},
         "contests": {},
+        "acted_user_ids": [],
     }
 
 
@@ -19,17 +20,12 @@ def start_new_round(state: dict) -> dict:
     state["round"] += 1
     state["seats"] = {}
     state["contests"] = {}
+    state["acted_user_ids"] = []
     return state
 
 
 def seat_count(state: dict) -> int:
     return max(len(state["alive_user_ids"]) - 1, 0)
-
-
-def available_seats(state: dict) -> list[int]:
-    taken = {int(key) for key in state["seats"]}
-    total = seat_count(state)
-    return [number for number in range(1, total + 1) if number not in taken]
 
 
 def seat_holder(state: dict, seat_number: int) -> int | None:
@@ -42,6 +38,18 @@ def already_seated(state: dict, user_id: int) -> int | None:
         if holder_id == user_id:
             return int(seat_number)
     return None
+
+
+def mark_action_taken(state: dict, user_id: int) -> None:
+    """Catat bahwa pemain ini melakukan aksi valid di ronde ini (§10 desain:
+    klik apa pun dari pemain yang belum punya kursi dihitung valid, apa pun
+    hasilnya) -- dipakai untuk membedakan AFK vs ELIMINATED saat resolve."""
+    if user_id not in state["acted_user_ids"]:
+        state["acted_user_ids"].append(user_id)
+
+
+def took_action(state: dict, user_id: int) -> bool:
+    return user_id in state["acted_user_ids"]
 
 
 def user_active_contest_seat(state: dict, user_id: int) -> int | None:
@@ -105,27 +113,20 @@ def is_round_complete(state: dict) -> bool:
     return len(state["seats"]) >= seat_count(state)
 
 
-def resolve_round(
-    state: dict, rng: random_module.Random | None = None
-) -> tuple[list[int], int | None]:
-    """Selesaikan ronde: kembalikan (survivor_user_ids, eliminated_user_id).
+def resolve_round(state: dict) -> tuple[list[int], list[int]]:
+    """Selesaikan ronde: kembalikan (survivor_user_ids, eliminated_user_ids).
 
-    Invarian: kursi = jumlah_hidup - 1, jadi tepat 1 pemain tereliminasi.
-    Kalau ada pemain yang belum pilih kursi saat waktu habis, sisa kursi
-    diisi acak dari mereka supaya yang benar-benar tereliminasi tetap 1 orang.
+    Kursi yang TIDAK PERNAH diklaim siapa pun tetap kosong permanen untuk
+    ronde ini -- TIDAK ADA lagi pengisian acak dari pemain yang tidak
+    beraksi (keputusan revisi setelah Tahap 3, lihat development-history.md).
+    Semua pemain hidup yang tidak punya kursi tereliminasi BERSAMAAN --
+    `eliminated_ids` bisa kosong (mustahil selama seat_count=alive-1, tapi
+    valid secara tipe), berisi 1 (kasus biasa: semua kursi lain terisi),
+    atau lebih dari 1 (beberapa kursi tak pernah dikontes siapa pun).
     """
-    rng = rng or random_module
     alive = list(state["alive_user_ids"])
-    seated = list(state["seats"].values())
-    target = seat_count(state)
-
-    unseated = [uid for uid in alive if uid not in seated]
-    rng.shuffle(unseated)
-
-    remaining_slots = max(target - len(seated), 0)
-    survivors = seated + unseated[:remaining_slots]
-    eliminated = unseated[remaining_slots:]
-
-    eliminated_user_id = eliminated[0] if eliminated else None
+    seated = set(state["seats"].values())
+    survivors = [uid for uid in alive if uid in seated]
+    eliminated = [uid for uid in alive if uid not in seated]
     state["alive_user_ids"] = survivors
-    return survivors, eliminated_user_id
+    return survivors, eliminated

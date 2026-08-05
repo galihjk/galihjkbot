@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
+from datetime import datetime
 from typing import Any
 
 from aiogram.types import InlineKeyboardMarkup
@@ -19,6 +20,7 @@ from app.modules.games.implementations.kursi_kosong.metadata import (
     CONTEST_WINDOW_SECONDS,
     KURSI_KOSONG_METADATA,
     MESSAGE_PAUSE_SECONDS,
+    MIN_ACTION_WINDOW_SECONDS,
     ROUND_TIMEOUT_SECONDS,
     SEAT_REVEAL_MAX_SECONDS,
     SEAT_REVEAL_MIN_SECONDS,
@@ -78,6 +80,15 @@ class KursiKosongGame(BaseGame):
             )
             return
 
+        # §10 desain: klik apa pun dari pemain yang belum punya kursi dihitung
+        # aksi valid untuk anti-AFK, apa pun hasilnya setelah titik ini
+        # (kursi kosong, kursi terisi, atau ditolak karena masih terikat
+        # kontes lain) -- ditandai & disimpan sekali di sini, bukan di tiap
+        # cabang (termasuk cabang yang return lebih awal di bawah).
+        game_state.mark_action_taken(state, user_id)
+        _save_state(context, state)
+        await context.db_session.flush()
+
         # Satu pemain hanya boleh terikat ke satu kontes aktif dalam satu
         # waktu -- klik ke kursi lain saat masih menunggu hasil kursi
         # sebelumnya ditolak (bukan pindah otomatis), sesuai keputusan user.
@@ -92,7 +103,9 @@ class KursiKosongGame(BaseGame):
         holder_id = game_state.seat_holder(state, seat_number)
         if holder_id is not None:
             await callback.answer(
-                texts.SEAT_TAKEN_ALERT.format(holder=self._display_name(context, holder_id)),
+                random.choice(texts.SEAT_TAKEN_ALERTS).format(
+                    holder=self._display_name(context, holder_id)
+                ),
                 show_alert=True,
             )
             return
@@ -135,6 +148,9 @@ class KursiKosongGame(BaseGame):
         elif parts[-2] == "contest":
             seat_number = int(parts[-1])
             await self._resolve_contest(context, seat_number)
+        elif parts[-2] == "countdown":
+            seconds_left = int(parts[-1])
+            await self._send_countdown_reminder(context, seconds_left)
 
     async def finish(self, context: GameContext, result: GameResult) -> None:
         return  # notifikasi kemenangan sudah dikirim di _resolve_round
@@ -150,8 +166,13 @@ class KursiKosongGame(BaseGame):
         ]
         seat_total = game_state.seat_count(state)
         players_by_id = {p.user_id: p.display_name for p in context.active_players}
+        # §25 desain: tinggal 2 pemain/1 kursi -- ronde final, pakai flourish
+        # pembuka khusus alih-alih header ronde biasa.
+        is_final = len(state["alive_user_ids"]) == 2
 
-        waiting_text = texts.render_round_waiting(state["round"], players, seat_total)
+        waiting_text = texts.render_round_waiting(
+            state["round"], players, seat_total, is_final=is_final
+        )
         message = await context.bot.send_message(context.telegram_chat_id, waiting_text)
         state["round_message_id"] = message.message_id
         _save_state(context, state)
@@ -164,7 +185,7 @@ class KursiKosongGame(BaseGame):
         await asyncio.sleep(random.uniform(SEAT_REVEAL_MIN_SECONDS, SEAT_REVEAL_MAX_SECONDS))
 
         ready_text = texts.render_round_ready(
-            state["round"], players, seat_total, ROUND_TIMEOUT_SECONDS
+            state["round"], players, seat_total, ROUND_TIMEOUT_SECONDS, is_final=is_final
         )
         keyboard = keyboards.build_seat_keyboard(
             context.session_id,
@@ -186,9 +207,28 @@ class KursiKosongGame(BaseGame):
                 "Gagal memunculkan keyboard kursi, session %s", context.session_id
             )
 
+        # Titik ini = kursi/keyboard BENAR sudah bisa diklik -- dipakai
+        # sebagai acuan "jendela keadilan" (MIN_ACTION_WINDOW_SECONDS) di
+        # _resolve_round supaya pemain yang belum sempat beraksi tidak
+        # salah dicap AFK kalau ronde ditutup jauh lebih cepat dari wajar.
+        state["ready_at"] = utcnow().isoformat()
+        _save_state(context, state)
+        await context.db_session.flush()
+
         context.game_manager.schedule_turn_timeout(
             context.session_id, ROUND_TIMEOUT_SECONDS
         )
+        # Reminder countdown 5/3 detik (§24 desain) -- cuma dijadwalkan kalau
+        # ronde memang cukup panjang untuk menyisakan waktu itu (jaga-jaga
+        # kalau suatu saat ROUND_TIMEOUT_SECONDS dikonfigurasi lebih pendek).
+        if ROUND_TIMEOUT_SECONDS > 5:
+            context.game_manager.schedule_timer(
+                context.session_id, "countdown:5", ROUND_TIMEOUT_SECONDS - 5
+            )
+        if ROUND_TIMEOUT_SECONDS > 3:
+            context.game_manager.schedule_timer(
+                context.session_id, "countdown:3", ROUND_TIMEOUT_SECONDS - 3
+            )
 
     async def _refresh_round_message(self, context: GameContext, state: dict) -> None:
         message_id = state.get("round_message_id")
@@ -216,6 +256,50 @@ class KursiKosongGame(BaseGame):
                 "Gagal memperbarui keyboard kursi, session %s", context.session_id
             )
 
+    async def _send_countdown_reminder(self, context: GameContext, seconds_left: int) -> None:
+        """Edit pesan ronde menjadi mengandung reminder countdown 5/3 detik
+        (§24 desain) -- keyboard & sisa isi teks tetap mencerminkan state
+        kursi/kontes TERKINI (bisa saja sudah berubah sejak ronde dimulai)."""
+        state = context.game_session.state_json
+        message_id = state.get("round_message_id")
+        if message_id is None:
+            return
+
+        players = [
+            p for p in context.active_players if p.user_id in state["alive_user_ids"]
+        ]
+        seat_total = game_state.seat_count(state)
+        is_final = len(state["alive_user_ids"]) == 2
+        text = texts.render_round_ready(
+            state["round"],
+            players,
+            seat_total,
+            ROUND_TIMEOUT_SECONDS,
+            is_final=is_final,
+            extra_note=texts.COUNTDOWN_NOTES.get(seconds_left),
+        )
+        players_by_id = {p.user_id: p.display_name for p in context.active_players}
+        keyboard = keyboards.build_seat_keyboard(
+            context.session_id,
+            state["round"],
+            seat_total,
+            state["seats"],
+            players_by_id,
+            state["contests"],
+        )
+        try:
+            await context.bot.edit_message_text(
+                text,
+                chat_id=context.telegram_chat_id,
+                message_id=message_id,
+                reply_markup=keyboard,
+            )
+        except Exception:
+            logger.exception(
+                "Gagal mengirim reminder countdown %s detik, session %s",
+                seconds_left, context.session_id,
+            )
+
     async def _resolve_contest(self, context: GameContext, seat_number: int) -> None:
         """Dipanggil saat timer jendela kontes (1,2 detik) sebuah kursi
         habis secara normal (bukan dipaksa oleh timeout ronde)."""
@@ -226,6 +310,12 @@ class KursiKosongGame(BaseGame):
 
         if game_state.is_round_complete(state):
             context.game_manager.cancel_turn_timeout(context.session_id)
+            # Reminder countdown belum tentu sudah nembak (ronde selesai
+            # lebih cepat dari 15 detik) -- batalkan supaya tidak menyusul
+            # muncul di pesan ronde BERIKUTNYA (pola sama seperti kontes
+            # dibatalkan dari timeout ronde, guide §7).
+            context.game_manager.cancel_timer(context.session_id, "countdown:5")
+            context.game_manager.cancel_timer(context.session_id, "countdown:3")
             await self._resolve_round(context)
 
     async def _settle_contest(self, context: GameContext, seat_number: int) -> bool:
@@ -298,32 +388,48 @@ class KursiKosongGame(BaseGame):
 
         await self._close_round_message(context, state)
 
-        survivors, eliminated_user_id = game_state.resolve_round(state)
+        survivors, eliminated_ids = game_state.resolve_round(state)
         _save_state(context, state)
         await context.db_session.flush()
 
-        players_by_id = {p.user_id: p for p in context.active_players}
-        eliminated_name = (
-            players_by_id[eliminated_user_id].display_name
-            if eliminated_user_id in players_by_id
-            else None
-        )
+        # Jendela keadilan (MIN_ACTION_WINDOW_SECONDS): kalau ronde ini
+        # selesai jauh lebih cepat dari wajar (kursi terakhir keburu penuh
+        # dalam hitungan detik), pemain yang belum sempat beraksi diberi
+        # keuntungan diragukan -- dicap ELIMINATED (kalah wajar), bukan AFK.
+        # Konsekuensi yang disadari: AFK sungguhan cuma terdeteksi akurat
+        # kalau rondenya berjalan cukup lama.
+        ready_at = state.get("ready_at")
+        fair_window_passed = True
+        if ready_at is not None:
+            elapsed = (utcnow() - datetime.fromisoformat(ready_at)).total_seconds()
+            fair_window_passed = elapsed >= MIN_ACTION_WINDOW_SECONDS
 
-        if eliminated_user_id is not None:
-            player = await find_player(
-                context.db_session, context.session_id, eliminated_user_id
-            )
+        players_by_id = {p.user_id: p for p in context.active_players}
+        normal_names: list[str] = []
+        afk_names: list[str] = []
+        for uid in eliminated_ids:
+            is_afk = fair_window_passed and not game_state.took_action(state, uid)
+            player = await find_player(context.db_session, context.session_id, uid)
             if player is not None:
-                player.status = GamePlayerStatus.ELIMINATED.value
+                player.status = (
+                    GamePlayerStatus.AFK.value
+                    if is_afk
+                    else GamePlayerStatus.ELIMINATED.value
+                )
                 player.eliminated_at = utcnow()
             await log_event(
                 context.db_session,
                 context.session_id,
                 GameEventType.PLAYER_ACTION.value,
-                actor_user_id=eliminated_user_id,
-                payload={"action": "eliminated", "round": state["round"]},
+                actor_user_id=uid,
+                payload={
+                    "action": "afk" if is_afk else "eliminated",
+                    "round": state["round"],
+                },
             )
-            await context.db_session.flush()
+            name = players_by_id[uid].display_name if uid in players_by_id else "?"
+            (afk_names if is_afk else normal_names).append(name)
+        await context.db_session.flush()
 
         survivor_names = [
             players_by_id[uid].display_name
@@ -332,12 +438,25 @@ class KursiKosongGame(BaseGame):
         ]
         await context.bot.send_message(
             context.telegram_chat_id,
-            texts.render_round_result(eliminated_name, survivor_names),
+            texts.render_round_result(normal_names, afk_names, survivor_names),
         )
         await asyncio.sleep(MESSAGE_PAUSE_SECONDS)
 
-        if len(survivors) <= 1:
-            winner_id = survivors[0] if survivors else None
+        if not survivors:
+            # Kasus ekstrem: tidak ada satu kursi pun diklaim ronde ini --
+            # semua pemain hidup tereliminasi bersamaan. MC umumkan tidak
+            # ada pemenang (bukan jalur error/gagal §39 desain).
+            await context.bot.send_message(
+                context.telegram_chat_id, texts.render_no_winner()
+            )
+            result = GameResult(
+                winner_user_id=None,
+                summary="Tidak ada pemenang",
+                payload={"rounds": state["round"]},
+            )
+            await context.game_manager.finish_game(context, result)
+        elif len(survivors) == 1:
+            winner_id = survivors[0]
             winner_name = (
                 players_by_id[winner_id].display_name
                 if winner_id in players_by_id
@@ -347,13 +466,10 @@ class KursiKosongGame(BaseGame):
                 context.telegram_chat_id, texts.render_winner(winner_name)
             )
 
-            if winner_id is not None:
-                player = await find_player(
-                    context.db_session, context.session_id, winner_id
-                )
-                if player is not None:
-                    player.status = GamePlayerStatus.WINNER.value
-                await context.db_session.flush()
+            player = await find_player(context.db_session, context.session_id, winner_id)
+            if player is not None:
+                player.status = GamePlayerStatus.WINNER.value
+            await context.db_session.flush()
 
             result = GameResult(
                 winner_user_id=winner_id,

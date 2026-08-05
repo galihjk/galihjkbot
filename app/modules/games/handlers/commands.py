@@ -135,6 +135,4 @@ async def handle_cancel_game(
         )
         await message.answer("Game dibatalkan.")
     except InvalidGameStateError:
-        await message.answer(
-            "Game sudah berjalan, tidak bisa dibatalkan lewat command ini."
-        )
+        await message.answer("Game tidak bisa dibatalkan saat ini.")

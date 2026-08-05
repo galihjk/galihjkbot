@@ -320,17 +320,24 @@ class GameManager:
         game_session = await game_repository.find_by_id(db_session, session_id)
         if game_session is None:
             raise SessionNotFoundError(str(session_id))
+        # RUNNING sengaja diizinkan juga (bukan cuma LOBBY/STARTING) --
+        # jalan keluar manual (/cancelgame) kalau sesi RUNNING macet karena
+        # bug (mis. panggilan Telegram gagal di tengah transisi ronde tanpa
+        # ada yang menangkap) dan tidak ada mekanisme lain yang bisa
+        # membebaskan grup untuk main game baru. Lihat development-history.md.
+        was_running = game_session.status == GameStatus.RUNNING.value
         if game_session.status not in (
             GameStatus.LOBBY.value,
             GameStatus.STARTING.value,
+            GameStatus.RUNNING.value,
         ):
             raise InvalidGameStateError(game_session.status)
 
         game = self._registry.get(game_session.game_key)
         # Diambil SEBELUM status berubah: pemain yang masih aktif saat ini
-        # (yang sudah join kalau dibatalkan dari lobby, atau yang sudah
-        # konfirmasi siap kalau dibatalkan dari ready-check, karena yang
-        # belum siap sudah di-kick lebih dulu) -- untuk disapa di pesan.
+        # (yang sudah join kalau dibatalkan dari lobby, yang sudah konfirmasi
+        # siap kalau dibatalkan dari ready-check, atau yang masih hidup
+        # kalau dibatalkan paksa saat RUNNING) -- untuk disapa di pesan.
         active_players = await game_repository.find_active_players(
             db_session, session_id
         )
@@ -339,7 +346,7 @@ class GameManager:
         game_session.status = GameStatus.CANCELLED.value
         game_session.cancelled_at = utcnow()
         game_session.cancellation_reason = reason
-        await db_session.flush()
+        await db_session.commit()
         await game_repository.log_event(
             db_session,
             session_id,
@@ -347,24 +354,32 @@ class GameManager:
             actor_user_id=cancelled_by_user_id,
             payload={"reason": reason},
         )
+        await db_session.commit()
 
         self._timers.cancel_session(session_id)
         self._locks.remove(session_id)
 
-        if game_session.lobby_message_id is not None:
-            group = await group_repository.find_by_id(db_session, game_session.group_id)
-            if group is not None:
-                text = render_cancelled_text(game.metadata, reason, mentioned_players)
-                try:
+        group = await group_repository.find_by_id(db_session, game_session.group_id)
+        if group is not None:
+            text = render_cancelled_text(game.metadata, reason, mentioned_players)
+            try:
+                # LOBBY/STARTING: edit pesan lobi yang sudah ada di tempat.
+                # RUNNING (dibatalkan paksa): tidak ada "pesan lobi" yang
+                # relevan lagi (sudah ditutup saat game dimulai) -- kirim
+                # pesan baru saja, jangan sentuh pesan ronde milik game
+                # spesifik (itu urusan `implementations/<key>/`, bukan engine).
+                if game_session.lobby_message_id is not None and not was_running:
                     await self._bot.edit_message_text(
                         text,
                         chat_id=group.telegram_chat_id,
                         message_id=game_session.lobby_message_id,
                     )
-                except Exception:
-                    logger.exception(
-                        "Gagal mengedit pesan lobby saat cancel, session %s", session_id
-                    )
+                else:
+                    await self._bot.send_message(group.telegram_chat_id, text)
+            except Exception:
+                logger.exception(
+                    "Gagal mengirim/mengedit pesan cancel, session %s", session_id
+                )
 
         await db_session.commit()
         return game_session

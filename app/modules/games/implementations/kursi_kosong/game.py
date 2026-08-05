@@ -6,6 +6,7 @@ import random
 from datetime import datetime
 from typing import Any
 
+from aiogram.exceptions import TelegramRetryAfter
 from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -54,6 +55,29 @@ def _save_state(context: GameContext, state: dict) -> None:
 # ini aman -- objek ORM tetap valid & bisa terus dimutasi sesudahnya.
 
 
+async def _call_with_retry(coro_factory, *, max_attempts: int = 3):
+    """Jalankan `coro_factory()` (callable TANPA argumen, mengembalikan
+    coroutine BARU tiap dipanggil supaya bisa diulang) -- otomatis tunggu &
+    ulangi kalau kena flood control Telegram (`TelegramRetryAfter`, sudah
+    menyebutkan `retry_after` yang pasti dari Telegram sendiri, jadi memang
+    layak ditunggu & dicoba lagi, beda dari error jaringan acak). Bug nyata
+    yang memicu ini: pesan awal ronde baru (`_begin_round`) kena flood
+    control lalu TIDAK ADA yang menangkap -- ronde gagal mulai SELAMANYA,
+    lihat development-history.md. Exception lain dibiarkan menjalar apa
+    adanya (bukan kondisi yang bisa diperbaiki dengan menunggu)."""
+    for attempt in range(max_attempts):
+        try:
+            return await coro_factory()
+        except TelegramRetryAfter as exc:
+            if attempt == max_attempts - 1:
+                raise
+            logger.warning(
+                "Flood control Telegram, tunggu %s detik (percobaan %s/%s)",
+                exc.retry_after, attempt + 1, max_attempts,
+            )
+            await asyncio.sleep(exc.retry_after + 0.5)
+
+
 class KursiKosongGame(BaseGame):
     metadata = KURSI_KOSONG_METADATA
 
@@ -63,7 +87,9 @@ class KursiKosongGame(BaseGame):
         await context.db_session.commit()
 
     async def start(self, context: GameContext) -> None:
-        await context.bot.send_message(context.telegram_chat_id, texts.WELCOME_TEXT)
+        await _call_with_retry(
+            lambda: context.bot.send_message(context.telegram_chat_id, texts.WELCOME_TEXT)
+        )
         await asyncio.sleep(MESSAGE_PAUSE_SECONDS+1)
         await self._begin_round(context)
 
@@ -216,8 +242,10 @@ class KursiKosongGame(BaseGame):
                 user.display_name or user.first_name or "?" if user is not None else "?"
             )
         try:
-            await context.bot.send_message(
-                context.telegram_chat_id, texts.render_final_results(results, names_by_id)
+            await _call_with_retry(
+                lambda: context.bot.send_message(
+                    context.telegram_chat_id, texts.render_final_results(results, names_by_id)
+                )
             )
         except Exception:
             logger.exception(
@@ -242,7 +270,16 @@ class KursiKosongGame(BaseGame):
         waiting_text = texts.render_round_waiting(
             state["round"], players, seat_total, is_final=is_final
         )
-        message = await context.bot.send_message(context.telegram_chat_id, waiting_text)
+        # Titik yang pernah bikin game macet SELAMANYA (lihat development-history.md):
+        # kalau ini gagal tanpa retry, ronde ini tidak punya pesan sama sekali
+        # untuk dipasangi keyboard -- tidak ada yang bisa "diselamatkan" lagi.
+        # `_call_with_retry` menangani flood control (kasus nyata yang terjadi)
+        # dengan menunggu & mencoba lagi; kegagalan LAIN (bukan flood control)
+        # tetap dibiarkan menjalar apa adanya -- gunakan /cancelgame kalau
+        # sampai terjadi supaya grup tidak terkunci menunggu game yang macet.
+        message = await _call_with_retry(
+            lambda: context.bot.send_message(context.telegram_chat_id, waiting_text)
+        )
         state["round_message_id"] = message.message_id
         _save_state(context, state)
         await context.db_session.commit()
@@ -265,11 +302,13 @@ class KursiKosongGame(BaseGame):
             state["contests"],
         )
         try:
-            await context.bot.edit_message_text(
-                ready_text,
-                chat_id=context.telegram_chat_id,
-                message_id=state["round_message_id"],
-                reply_markup=keyboard,
+            await _call_with_retry(
+                lambda: context.bot.edit_message_text(
+                    ready_text,
+                    chat_id=context.telegram_chat_id,
+                    message_id=state["round_message_id"],
+                    reply_markup=keyboard,
+                )
             )
         except Exception:
             logger.exception(
@@ -315,10 +354,12 @@ class KursiKosongGame(BaseGame):
             state["contests"],
         )
         try:
-            await context.bot.edit_message_reply_markup(
-                chat_id=context.telegram_chat_id,
-                message_id=message_id,
-                reply_markup=keyboard,
+            await _call_with_retry(
+                lambda: context.bot.edit_message_reply_markup(
+                    chat_id=context.telegram_chat_id,
+                    message_id=message_id,
+                    reply_markup=keyboard,
+                )
             )
         except Exception:
             logger.exception(
@@ -357,11 +398,13 @@ class KursiKosongGame(BaseGame):
             state["contests"],
         )
         try:
-            await context.bot.edit_message_text(
-                text,
-                chat_id=context.telegram_chat_id,
-                message_id=message_id,
-                reply_markup=keyboard,
+            await _call_with_retry(
+                lambda: context.bot.edit_message_text(
+                    text,
+                    chat_id=context.telegram_chat_id,
+                    message_id=message_id,
+                    reply_markup=keyboard,
+                )
             )
         except Exception:
             logger.exception(
@@ -416,11 +459,13 @@ class KursiKosongGame(BaseGame):
                 players_by_id.get(uid, "?") for uid in contestants if uid != winner_id
             ]
             try:
-                await context.bot.send_message(
-                    context.telegram_chat_id,
-                    texts.render_contest_result(
-                        seat_number, contestant_names, winner_name, loser_names
-                    ),
+                await _call_with_retry(
+                    lambda: context.bot.send_message(
+                        context.telegram_chat_id,
+                        texts.render_contest_result(
+                            seat_number, contestant_names, winner_name, loser_names
+                        ),
+                    )
                 )
             except Exception:
                 logger.exception(
@@ -446,11 +491,13 @@ class KursiKosongGame(BaseGame):
             state["round"], seat_total, state["seats"], players_by_id
         )
         try:
-            await context.bot.edit_message_text(
-                closed_text,
-                chat_id=context.telegram_chat_id,
-                message_id=message_id,
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=[]),
+            await _call_with_retry(
+                lambda: context.bot.edit_message_text(
+                    closed_text,
+                    chat_id=context.telegram_chat_id,
+                    message_id=message_id,
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[]),
+                )
             )
         except Exception:
             logger.exception(
@@ -513,9 +560,11 @@ class KursiKosongGame(BaseGame):
             if uid in players_by_id
         ]
         try:
-            await context.bot.send_message(
-                context.telegram_chat_id,
-                texts.render_round_result(normal_names, afk_names, survivor_names),
+            await _call_with_retry(
+                lambda: context.bot.send_message(
+                    context.telegram_chat_id,
+                    texts.render_round_result(normal_names, afk_names, survivor_names),
+                )
             )
         except Exception:
             logger.exception(
@@ -536,8 +585,10 @@ class KursiKosongGame(BaseGame):
             # TelegramNetworkError di sini yang bikin finish_game TIDAK
             # PERNAH terpanggil).
             try:
-                await context.bot.send_message(
-                    context.telegram_chat_id, texts.render_no_winner()
+                await _call_with_retry(
+                    lambda: context.bot.send_message(
+                        context.telegram_chat_id, texts.render_no_winner()
+                    )
                 )
             except Exception:
                 logger.exception(
@@ -560,8 +611,10 @@ class KursiKosongGame(BaseGame):
                 else "?"
             )
             try:
-                await context.bot.send_message(
-                    context.telegram_chat_id, texts.render_winner(winner_name)
+                await _call_with_retry(
+                    lambda: context.bot.send_message(
+                        context.telegram_chat_id, texts.render_winner(winner_name)
+                    )
                 )
             except Exception:
                 logger.exception(

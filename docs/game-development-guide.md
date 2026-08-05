@@ -8,7 +8,7 @@ Contoh acuan langsung: `app/modules/games/implementations/simple_game/` — tamp
 - [`game-design-kursi-kosong.md`](game-design-kursi-kosong.md) — spesifikasi desain murni (transkrip dari dokumen desain, diarsipkan di `archive/`)
 - [`kursi-kosong-implementation-plan.md`](kursi-kosong-implementation-plan.md) — rencana pembangunannya di atas engine ini, bertahap
 
-Beberapa bagian di panduan ini (§6, §7, §11, §15 baru) sudah disesuaikan berdasarkan kebutuhan yang ketahuan saat mempelajari desain Kursi Kosong — dibaca dulu sebelum mulai, supaya tidak kaget saat baca rencana implementasinya.
+Beberapa bagian di panduan ini (§4, §6, §7, §11, §15, §16) sudah disesuaikan/ditambah berdasarkan yang ketahuan selama membangun Kursi Kosong — baik dari studi desain maupun dari testing manual sungguhan. Dokumen ini ditulis supaya **cukup dibaca sendiri** untuk menambah game baru — kamu seharusnya tidak perlu buka kode `simple_game`/`kursi_kosong` untuk tahu polanya, cukup baca panduan ini.
 
 ---
 
@@ -276,26 +276,25 @@ Ketahuan saat implementasi Kursi Kosong Tahap 1: `GameCallback.pack()` (dari `Ca
 
 ## 7. Timer dalam-game
 
-Lobby timer dan ready-check timer **sudah otomatis** ditangani `GameManager`. Untuk timer di DALAM game (ronde, giliran, dst), game kamu yang jadwalkan sendiri lewat context:
+Lobby timer dan ready-check timer **sudah otomatis** ditangani `GameManager`. Untuk timer di DALAM game (ronde, giliran, dst), game kamu yang jadwalkan sendiri lewat context. Ada dua API, generalisasi multi-slot ini selesai di Tahap 0 Kursi Kosong:
 
 ```python
+# Timer SATU slot per session ("round") -- cukup kalau game kamu cuma butuh
+# "satu ronde = satu timeout" (pola simple_game):
 context.game_manager.schedule_turn_timeout(context.session_id, delay_seconds)
-context.game_manager.cancel_turn_timeout(context.session_id)   # kalau ronde selesai lebih cepat dari timeout
+context.game_manager.cancel_turn_timeout(context.session_id)
+
+# Timer BANYAK slot per session, dibedakan lewat `name` -- independen satu
+# sama lain, tidak saling cancel:
+context.game_manager.schedule_timer(context.session_id, "contest:4", delay_seconds)
+context.game_manager.cancel_timer(context.session_id, "contest:4")
 ```
 
-Saat timer ini berbunyi, `GameManager` otomatis membangun `GameContext` **baru** (dengan `db_session` baru dari session_factory-nya sendiri, bukan session request yang sudah lama ditutup) dan memanggil `YourGame.handle_timeout(context, "turn:{session_id}")`. Kamu tidak perlu — dan tidak bisa — pakai `db_session` yang sama dengan yang dipakai saat menjadwalkan; selalu terima `db_session` baru dari `context` yang diberikan ke `handle_timeout`.
+`schedule_turn_timeout`/`cancel_turn_timeout` sebenarnya cuma wrapper tipis di atas `schedule_timer`/`cancel_timer` dengan `name="round"` (dipertahankan supaya `simple_game` tidak perlu diubah). **Pakai `schedule_timer`/`cancel_timer` langsung** kalau game kamu butuh beberapa timer berjalan BERSAMAAN dalam satu ronde — misalnya jendela kontes per-kursi di Kursi Kosong Tahap 2 (bisa ada beberapa kursi diperebutkan sekaligus, masing-masing punya jendela waktu sendiri).
 
-**Kalau bikin timer generik baru sendiri (bukan lewat `schedule_turn_timeout`)**: pelajari dulu bug self-cancellation yang pernah terjadi di `TimerRegistry` (riwayat pengembangan) — intinya, kalau kode di dalam sebuah timer task memicu `cancel_session()`/`cancel_game()` untuk sesi yang sama, task itu bisa membatalkan DIRINYA SENDIRI di tengah eksekusi sebelum selesai commit. `TimerRegistry.cancel()` sudah dijaga (skip kalau target adalah `asyncio.current_task()`), tapi kalau kamu menulis mekanisme timer/lock BARU di luar `TimerRegistry`, waspada pola yang sama.
+Saat timer berbunyi, `GameManager` otomatis membangun `GameContext` **baru** (dengan `db_session` baru dari session_factory-nya sendiri, bukan session request yang sudah lama ditutup) dan memanggil `YourGame.handle_timeout(context, timer_key)` — `timer_key` berbentuk `f"turn:{session_id}:{name}"` (untuk `schedule_turn_timeout`, `name` selalu `"round"`). Kalau kamu punya beberapa timer sekaligus, `handle_timeout` bisa membedakan mana yang berbunyi lewat isi `timer_key` (misal cek `"contest:" in timer_key`). Kamu tidak perlu — dan tidak bisa — pakai `db_session` yang sama dengan yang dipakai saat menjadwalkan; selalu terima `db_session` baru dari `context` yang diberikan ke `handle_timeout`.
 
-### ⚠️ KETERBATASAN SAAT INI: cuma 1 slot timer dalam-game per session
-
-`schedule_turn_timeout`/`cancel_turn_timeout` cuma menyediakan **satu** slot timer per session (key tetap `turn:{session_id}`). Ini cukup untuk game yang timer-nya cuma "satu ronde = satu timeout" (seperti `simple_game`).
-
-**Ini TIDAK cukup untuk game yang butuh beberapa timer berjalan BERSAMAAN dalam satu ronde** — misalnya Kursi Kosong, di mana tiap kursi yang mulai diperebutkan punya jendela waktu 1.200ms sendiri, dan bisa ada beberapa kursi diperebutkan bersamaan dalam satu ronde. Kalau kamu panggil `schedule_turn_timeout` lagi untuk kursi kedua sementara timer kursi pertama belum selesai, `TimerRegistry.register()` akan **membatalkan timer kursi pertama** (karena key-nya sama, `register()` selalu cancel dulu key lama sebelum pasang yang baru) — bukan berjalan paralel seperti yang dibutuhkan.
-
-**Belum diperbaiki** — ini salah satu tugas di rencana implementasi Kursi Kosong: generalisasi jadi `schedule_timer(session_id, name, delay)` / `cancel_timer(session_id, name)` dengan key `turn:{session_id}:{name}`, plus perbaikan `TimerRegistry.cancel_session()` (saat ini pencocokan key-nya `key.partition(":")` lalu bandingkan exact sama `str(session_id)` — kalau key jadi `turn:5:chair-3`, hasil partition `sid="5:chair-3"` tidak akan cocok dengan `"5"`, jadi timer per-chair tidak akan ikut ter-cancel saat `cancel_session()` dipanggil. Perlu diubah jadi cek `sid == str(session_id) or sid.startswith(f"{session_id}:")`).
-
-Kalau game kamu cukup dengan SATU timer per ronde, `schedule_turn_timeout` yang ada sekarang sudah cukup, tidak perlu menunggu generalisasi ini.
+**Kalau bikin timer generik baru sendiri (bukan lewat `schedule_timer`/`schedule_turn_timeout`)**: pelajari dulu bug self-cancellation yang pernah terjadi di `TimerRegistry` (riwayat pengembangan) — intinya, kalau kode di dalam sebuah timer task memicu `cancel_session()`/`cancel_game()` untuk sesi yang sama, task itu bisa membatalkan DIRINYA SENDIRI di tengah eksekusi sebelum selesai commit. `TimerRegistry.cancel()` sudah dijaga (skip kalau target adalah `asyncio.current_task()`), tapi kalau kamu menulis mekanisme timer/lock BARU di luar `TimerRegistry`, waspada pola yang sama.
 
 **Soal granularitas lock — ini BUKAN gap, sengaja begitu:** desain Kursi Kosong (§34 di dokumen desainnya) mengusulkan lock terpisah per ronde/pemain/kursi. Engine kita cuma punya **satu lock per session** (`GameLockManager`, lihat §14 di bawah). Ini tetap cukup karena bot berjalan sebagai **satu proses Python saja** (bukan multi-worker) — satu lock per session sudah menyerialkan SEMUA mutasi untuk session itu, granularitas lebih halus baru penting kalau suatu saat ada lebih dari satu proses mengakses database yang sama secara paralel. Jangan bikin lock tambahan per-kursi/per-pemain kecuali arsitektur deployment berubah.
 
@@ -363,9 +362,9 @@ count_active_players(session, game_session_id) -> int
 log_event(session, game_session_id, event_type, actor_user_id=None, payload=None) -> GameEvent
 ```
 
-Status pemain (`app/core/enums.py::GamePlayerStatus`): `JOINED`, `ACTIVE`, `LEFT`, `ELIMINATED`, `WINNER`, `DISQUALIFIED`. Game kamu boleh set `player.status` langsung (lihat `SimpleGame._resolve_round` set `ELIMINATED`/`WINNER`) — tidak perlu lewat fungsi repository khusus untuk itu, cukup ambil row via `find_player()` lalu ubah atributnya dan `flush()`.
+Status pemain (`app/core/enums.py::GamePlayerStatus`): `JOINED`, `ACTIVE`, `LEFT`, `ELIMINATED`, `AFK`, `WINNER`, `DISQUALIFIED`. Game kamu boleh set `player.status` langsung (lihat `SimpleGame._resolve_round` set `ELIMINATED`/`WINNER`) — tidak perlu lewat fungsi repository khusus untuk itu, cukup ambil row via `find_player()` lalu ubah atributnya dan `flush()`.
 
-**Belum ada nilai `AFK`.** Desain Kursi Kosong butuh AFK sebagai status TERPISAH dari `ELIMINATED` — bukan cuma beda label, tapi beda konsekuensi skor (AFK menghanguskan seluruh skor sesi, `ELIMINATED` normal tetap dapat skor partisipasi+ketahanan). Menambah value baru ke enum ini **tidak butuh migration** (kolomnya `String` biasa), tapi kalau game kamu butuh bedakan AFK vs eliminasi normal, tambahkan `AFK = "afk"` ke `GamePlayerStatus` dulu.
+**`AFK` sudah ada** (ditambahkan di Tahap 0 Kursi Kosong) sebagai status TERPISAH dari `ELIMINATED` — bedanya bukan cuma label, tapi konsekuensi skor: `ELIMINATED` normal tetap dapat skor partisipasi+ketahanan penuh, `AFK` kena penalti (lihat `game-design-kursi-kosong.md` §19 untuk formula lengkapnya — sudah direvisi jadi penalti PARSIAL berdasarkan diskusi dengan user, BUKAN lagi "hangus total" seperti draf desain awal). Menambah value baru lain ke enum ini juga **tidak butuh migration** (kolomnya `String` biasa).
 
 Kalau butuh event type baru untuk audit log, tambahkan ke `GameEventType` di `app/core/enums.py` — ini cuma string biasa di kolom `String`, jadi menambah/mengganti value tidak butuh migration.
 
@@ -378,7 +377,7 @@ Kalau butuh event type baru untuk audit log, tambahkan ke `GameEventType` di `ap
 3. `state.py` — fungsi murni untuk bentuk `state_json` kamu (opsional tapi disarankan, gampang ditest)
 4. `keyboards.py` — builder `InlineKeyboardMarkup` pakai `GameCallback(session_id=..., data=...)`
 5. `texts.py` — template teks (ikuti konvensi §9)
-6. `game.py` — class turunan `BaseGame`, implementasikan 6 method abstrak
+6. `game.py` — class turunan `BaseGame`, implementasikan 6 method abstrak. Resolusi identitas pemain di `handle_callback`/`handle_message` **wajib** pakai `context.acting_user_id` (§4) — JANGAN `callback.from_user.id` manual, itu bikin testing lewat persona (`/p1`..`/p7`) tidak berfungsi. Kalau game kamu naratif/bertempo santai (bukan sengaja instan), pertimbangkan pacing pesan (§16).
 7. Daftarkan di `app/bootstrap.py::create_game_registry()`: `registry.register(YourGame())`
 8. **Test tanpa Telegram sungguhan dulu** — panggil `GameManager` langsung dengan `Bot` palsu (lihat pola test di riwayat pengembangan: `FakeBot` dengan `send_message`/`edit_message_text` yang cuma mencatat teks) dan SQLite file sungguhan (bukan `:memory:` kalau mau tes konkurensi, karena koneksi terpisah butuh file yang sama). Uji dengan `asyncio.gather` untuk skenario dua pemain menekan tombol yang sama bersamaan — ini yang paling sering menyembunyikan bug lock/state.
 9. Baru setelah lolos test manual, coba di Telegram sungguhan (bisa solo lewat `/p1`.."/p7", lihat panduan persona di riwayat pengembangan).
@@ -425,4 +424,60 @@ Ini bukan cuma soal Kursi Kosong — kalau dibangun HANYA khusus untuk Kursi Kos
 - Kemungkinan perlu 1 hook baru di `BaseGame` (misal `calculate_scores(context, result) -> dict[user_id, int]`) yang dipanggil `GameManager.finish_game()` sebelum/sesudah `finish()` — supaya commit skor terjadi di SATU tempat generik (jadi aturan "skor cuma dicommit sekali", "game yang di-cancel tidak dapat skor" otomatis berlaku ke semua game, tidak perlu diulang tiap implementasi).
 - Statistik per-game (`games_played` dkk) bisa dihitung on-demand dari `game_players`+`game_sessions` yang sudah ada (tidak perlu tabel agregat baru di awal) — cukup tambah query di repository kalau/ketika ada UI yang menampilkannya (`/profil`, dsb — belum ada).
 
-**Status: didesain di rencana implementasi, belum ada satu baris kode pun.** Jangan mulai coding Kursi Kosong sebelum keputusan arsitektur skor ini diambil, supaya tidak perlu migration ulang.
+**Status: didesain di rencana implementasi, belum ada satu baris kode pun** (menunggu Tahap 4). Formula skor AFK di desain sudah direvisi jadi penalti PARSIAL (bukan hangus total seperti draf awal) — lihat `game-design-kursi-kosong.md` §19 dan `development-history.md` untuk kronologi keputusannya. Jangan mulai coding skor sebelum baca revisi itu, supaya tidak salah implementasi formula lama yang sudah tidak berlaku.
+
+---
+
+## 16. Pacing pesan dalam-game (jeda dramatis)
+
+Ketahuan dari testing manual Kursi Kosong Tahap 1: kalau bot mengirim beberapa pesan berturutan TANPA jeda, permainan terasa terlalu instan/kaku — pemain baru selesai baca "Selamat datang" eh tombol kursi sudah muncul duluan, tidak ada momen "menahan napas". Ini bukan bug, tapi konvensi pacing yang **direkomendasikan** dipakai konsisten di game manapun yang naratif/bertempo santai (beda kasus kalau game kamu memang sengaja serba instan).
+
+### Aturan umum
+
+1. **Kapan pun bot mengirim/mengedit lebih dari satu pesan berturutan** dalam satu alur logis (contoh Kursi Kosong: narasi pembukaan → pesan ronde, narasi hasil ronde → pesan ronde berikutnya/pengumuman pemenang), beri jeda pendek `await asyncio.sleep(...)` di antaranya. Simpan angkanya sebagai konstanta di `metadata.py` game kamu (bukan hardcode di `game.py`), biar gampang di-tuning.
+2. **Elemen interaktif (keyboard) tidak harus muncul bersamaan dengan teks pertamanya** — kalau mau bangun ketegangan (mis. "musik akan segera dimulai" sebelum kursi bisa dipilih): kirim teks dulu TANPA `reply_markup`, simpan `message_id`-nya di `state_json`, beri jeda **acak** (`random.uniform(min, max)` — sengaja acak biar tidak gampang ditebak polanya oleh pemain), baru `edit_message_text(text=teks_versi_final, reply_markup=keyboard, ...)` untuk memunculkan teks final DAN keyboard BARENGAN.
+3. **Timer terkait (mis. batas waktu memilih) HARUS mulai dihitung SETELAH elemen interaktifnya benar-benar muncul**, bukan dari saat teks pertama dikirim — kalau tidak, jeda dramatis itu malah memotong waktu pemain buat bereaksi. Panggil `schedule_turn_timeout`/`schedule_timer` (§7) SETELAH langkah edit-reveal, bukan sebelumnya.
+4. **Pesan yang sudah "usang" (mis. ronde yang baru selesai) sebaiknya ditutup**, bukan dibiarkan nongkrong dengan tombol yang kelihatan masih bisa diklik (walau secara fungsi klik ke situ mestinya sudah ditolak lewat validasi round, §6). Edit pesan lama jadi snapshot final (hasil apa adanya, keyboard dilepas) sebelum lanjut ke pesan berikutnya.
+5. **Pacing ini KHUSUS pesan dalam-game (`game.py` milikmu)** — JANGAN diterapkan ke pesan sistem generik (lobby, ready-check, dst di `engine/lobby.py`/`GameManager`), itu tetap instan seperti sekarang. Kalau menurutmu pesan sistem generik juga butuh pacing, itu perubahan `engine/` yang perlu didiskusikan dulu — bukan sesuatu yang kamu tambahkan sendiri per-game.
+
+### Contoh konkret (dari `implementations/kursi_kosong/`)
+
+```python
+# metadata.py
+MESSAGE_PAUSE_SECONDS = 2       # jeda umum antar-pesan berurutan
+SEAT_REVEAL_MIN_SECONDS = 3     # jeda acak sebelum elemen interaktif (kursi) muncul
+SEAT_REVEAL_MAX_SECONDS = 5
+
+# game.py
+async def start(self, context: GameContext) -> None:
+    await context.bot.send_message(context.telegram_chat_id, texts.WELCOME_TEXT)
+    await asyncio.sleep(MESSAGE_PAUSE_SECONDS)
+    await self._begin_round(context)
+
+async def _begin_round(self, context: GameContext) -> None:
+    ...
+    waiting_text = texts.render_round_waiting(...)   # "Bersiaplah...", TANPA ajakan aksi/hitungan waktu
+    message = await context.bot.send_message(context.telegram_chat_id, waiting_text)
+    state["round_message_id"] = message.message_id
+    _save_state(context, state)
+    await context.db_session.flush()
+
+    await asyncio.sleep(random.uniform(SEAT_REVEAL_MIN_SECONDS, SEAT_REVEAL_MAX_SECONDS))
+
+    ready_text = texts.render_round_ready(...)   # ajakan aksi + hitungan waktu, BARU masuk akal di titik ini
+    keyboard = keyboards.build_seat_keyboard(...)
+    await context.bot.edit_message_text(
+        ready_text, chat_id=context.telegram_chat_id,
+        message_id=state["round_message_id"], reply_markup=keyboard,
+    )
+
+    context.game_manager.schedule_turn_timeout(context.session_id, ROUND_TIMEOUT_SECONDS)  # BARU di sini
+```
+
+### ⚠️ GOTCHA: `edit_message_reply_markup` TIDAK mengubah teks
+
+Kalau reveal-mu perlu mengubah TEKS juga (bukan cuma menambah/melepas keyboard), pakai `edit_message_text(text=..., reply_markup=...)` — BUKAN `edit_message_reply_markup(reply_markup=...)`, yang cuma menyentuh keyboard dan membiarkan teks lama tetap nongkrong walau isinya sudah tidak relevan (mis. masih bilang "bersiaplah" padahal keyboard sudah aktif dan timer sudah jalan).
+
+### Rekomendasi angka (bukan aturan mati)
+
+Kursi Kosong (ronde 15 detik, tempo santai) pakai `MESSAGE_PAUSE_SECONDS=2-3` detik dan jeda reveal acak `3-5` detik. Kalau game barumu jauh lebih cepat temponya (mis. ronde 5 detik), pertimbangkan jeda lebih pendek supaya total waktu "mati" antar-ronde tidak lebih besar dari waktu aktifnya sendiri — tidak ada angka baku, sesuaikan dengan tempo game kamu, tapi **jangan nol** (itu balik ke masalah awal: terasa instan/kaku, sudah dikomplain user sekali untuk Kursi Kosong).

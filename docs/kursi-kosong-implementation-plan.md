@@ -2,7 +2,7 @@
 
 Rencana bertahap untuk membangun **Kursi Kosong** sebagai game pertama yang sesungguhnya (bukan game "Test"/`simple_game` yang cuma buat uji fondasi engine). Setiap tahap menghasilkan sesuatu yang bisa dites, dan tahap berikutnya boleh menunggu sampai tahap sebelumnya benar-benar jalan.
 
-Dasar: [`game-design-kursi-kosong.md`](game-design-kursi-kosong.md) (spesifikasi desain) + [`game-development-guide.md`](game-development-guide.md) (kontrak engine, termasuk gap yang sudah diketahui dari §6-7 dan §15 di sana).
+Dasar: [`game-design-kursi-kosong.md`](game-design-kursi-kosong.md) (spesifikasi desain) + [`game-development-guide.md`](game-development-guide.md) (kontrak engine — §4 `acting_user_id`, §6-7 callback/timer, §15 skor, §16 pacing pesan, semuanya sudah final per Tahap 1, bukan lagi "gap yang belum dikerjakan").
 
 **Key & folder yang diusulkan:** `app/modules/games/implementations/kursi_kosong/`, `GameMetadata.key="kursi_kosong"`, class `KursiKosongGame`. (Desain aslinya menyebut `game_code = empty_chair` — pakai `kursi_kosong` saja supaya konsisten dengan nama Indonesia yang dipakai di semua teks bot; ganti kalau ada preferensi lain.)
 
@@ -65,9 +65,20 @@ Diverifikasi lewat integration test ad-hoc (urutan & timestamp nyata tiap `send_
 
 **Susulan ketiga — teks ronde dua fase:** user mengoreksi lagi: kalimat "Silakan memilih kursi sebelum 15 detik..." tadinya sudah muncul di pesan FASE 1 (sebelum kursi ada), padahal timer belum jalan dan tombolnya belum bisa diklik — janggal. Dipecah jadi `texts.render_round_waiting()` (dikirim pertama, cuma "RONDE N DIMULAI! ... Bersiaplah, musik akan segera dimainkan...", TANPA ajakan pilih kursi/keyboard) dan `texts.render_round_ready()` (dipasang lewat `edit_message_text` BARENGAN keyboard muncul, isinya ajakan pilih kursi + hitungan waktu — karena baru di titik itu keduanya benar). `_begin_round()` di `game.py` diubah dari `edit_message_reply_markup` (cuma keyboard) jadi `edit_message_text` (teks DAN keyboard sekaligus) untuk langkah reveal. Diverifikasi lewat integration test ad-hoc + regresi 3/8 pemain, tetap lolos.
 
+**Nilai pacing FINAL saat ini** (setelah user tuning manual, JANGAN dikembalikan ke angka sebelumnya): `MESSAGE_PAUSE_SECONDS` welcome→ronde 1 = `+1` detik ekstra (khusus di `start()`), `SEAT_REVEAL_MIN_SECONDS=3`/`SEAT_REVEAL_MAX_SECONDS=5` (bukan 2-4 lagi). Pola generiknya (bukan angka spesifiknya) sudah didokumentasikan sebagai rekomendasi untuk game LAIN di `game-development-guide.md` §16.
+
+**Susulan keempat — bug persona (`/p1`-`/p7`) tidak dihormati di callback dalam-game:** ketahuan saat user testing manual solo. Ternyata bug ENGINE (`handle_game_callback` tidak meneruskan identitas hasil resolusi `PersonaMiddleware` ke `GameManager`/`BaseGame`), bukan spesifik Kursi Kosong — `simple_game` punya pola identik. Diperbaiki dengan `GameContext.acting_user_id` baru, di-thread dari router → `GameManager.handle_callback`/`handle_message` → `_build_context`. `KursiKosongGame.handle_callback` diubah pakai `context.acting_user_id`, helper `_resolve_user_id` lama dihapus. `simple_game` sengaja tidak diubah (frozen). Detail lengkap + hasil verifikasi di `development-history.md` dan `game-development-guide.md` §4.
+
+**Status Tahap 1 sekarang: benar-benar tuntas** (mekanik + pacing + bug persona), siap jadi fondasi Tahap 2.
+
 ---
 
 ## Tahap 2 — Mekanisme rebutan kursi yang sesungguhnya
+
+**Sebelum mulai, pertahankan pola yang sudah ada di Tahap 1** (jangan bikin ulang dari nol):
+- Resolusi identitas pemain di `handle_callback` tetap pakai `context.acting_user_id` (guide §4) — kontes multi-pemain berarti banyak callback masuk untuk kursi yang sama, pastikan tiap pemain yang ikut kontes teridentifikasi lewat `acting_user_id` masing-masing, bukan `callback.from_user.id`.
+- Narasi kontes (desain §14, "Andi dan Budi tiba di Kursi 3...") ikut konvensi pacing (guide §16) — kalau kontes selesai lalu ada pesan lanjutan (mis. update kursi + lanjut cek apakah ronde selesai), pertimbangkan jeda `MESSAGE_PAUSE_SECONDS` yang sama supaya konsisten dengan ritme yang sudah dibangun di Tahap 1, jangan tiba-tiba instan lagi di titik ini.
+- Timer kontes per-kursi pakai `schedule_timer`/`cancel_timer` (bukan `schedule_turn_timeout`, itu untuk timer ronde) — lihat guide §7.
 
 Ganti first-click-wins dengan mekanisme dari desain §11-13:
 

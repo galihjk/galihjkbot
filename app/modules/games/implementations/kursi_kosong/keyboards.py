@@ -17,13 +17,17 @@ def build_seat_keyboard(
     seat_total: int,
     seats: dict[str, int],
     players_by_id: dict[int, str],
+    contests: dict[str, dict] | None = None,
 ) -> InlineKeyboardMarkup:
+    contests = contests or {}
     buttons = []
     for number in range(1, seat_total + 1):
         holder_id = seats.get(str(number))
         if holder_id is not None:
             holder_name = players_by_id.get(holder_id, "?")
             text = f"🪑 {number} · {_truncate(holder_name)}"
+        elif str(number) in contests:
+            text = f"🔥 {number} · Diperebutkan"
         else:
             text = f"🪑 {number}"
         buttons.append(

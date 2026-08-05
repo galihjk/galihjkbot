@@ -2,18 +2,23 @@ from __future__ import annotations
 
 import random as random_module
 
+FIRST_CLICK_WEIGHT = 1.25
+OTHER_CLICK_WEIGHT = 1.00
+
 
 def build_initial_state(alive_user_ids: list[int]) -> dict:
     return {
         "round": 0,
         "alive_user_ids": list(alive_user_ids),
         "seats": {},
+        "contests": {},
     }
 
 
 def start_new_round(state: dict) -> dict:
     state["round"] += 1
     state["seats"] = {}
+    state["contests"] = {}
     return state
 
 
@@ -37,6 +42,51 @@ def already_seated(state: dict, user_id: int) -> int | None:
         if holder_id == user_id:
             return int(seat_number)
     return None
+
+
+def user_active_contest_seat(state: dict, user_id: int) -> int | None:
+    """Nomor kursi yang sedang dikontes user ini (belum resolve), kalau ada."""
+    for seat_number, contest in state["contests"].items():
+        if user_id in contest["contestants"]:
+            return int(seat_number)
+    return None
+
+
+def join_contest(state: dict, seat_number: int, user_id: int) -> tuple[bool, bool]:
+    """Mulai atau ikut kontes kursi ini.
+
+    Return (joined, is_new): `is_new=True` kalau kontes ini baru dibuat oleh
+    klik ini (pemanggil perlu menjadwalkan timer jendela kontes). `joined=False`
+    kalau user ini sudah tercatat di kontes yang sama (klik dobel).
+    """
+    contests = state["contests"]
+    key = str(seat_number)
+    contest = contests.get(key)
+    if contest is None:
+        contests[key] = {"contestants": [user_id]}
+        return True, True
+    if user_id in contest["contestants"]:
+        return False, False
+    contest["contestants"].append(user_id)
+    return True, False
+
+
+def pop_contest(state: dict, seat_number: int) -> dict | None:
+    """Ambil & hapus entri kontes kursi ini (dipakai saat resolve)."""
+    return state["contests"].pop(str(seat_number), None)
+
+
+def pick_contest_winner(
+    contestants: list[int], rng: random_module.Random | None = None
+) -> int:
+    """Pilih pemenang kontes secara berbobot (§13 desain): pengklik pertama
+    (index 0) bobot 1,25, sisanya 1,00."""
+    rng = rng or random_module
+    weights = [
+        FIRST_CLICK_WEIGHT if i == 0 else OTHER_CLICK_WEIGHT
+        for i in range(len(contestants))
+    ]
+    return rng.choices(contestants, weights=weights, k=1)[0]
 
 
 def claim_seat(state: dict, seat_number: int, user_id: int) -> bool:

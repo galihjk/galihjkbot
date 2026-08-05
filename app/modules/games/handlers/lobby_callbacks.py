@@ -5,6 +5,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import AdminRole
 from app.core.exceptions import (
+    InsufficientPlayersError,
     InvalidGameStateError,
     PlayerAlreadyJoinedError,
     PlayerLimitReachedError,
@@ -53,6 +54,10 @@ async def handle_lobby_callback(
             await callback.answer("Kamu siap!")
         elif action == "cancel":
             await _handle_cancel(callback, game_manager, db_session, current_user, admin_role)
+        elif action == "force_start":
+            await _handle_force_start(
+                callback, game_manager, db_session, current_user, admin_role
+            )
         else:
             await callback.answer()
     except SessionNotFoundError:
@@ -94,3 +99,34 @@ async def _handle_cancel(
         cancelled_by_user_id=current_user.id,
     )
     await callback.answer("Game dibatalkan.")
+
+
+async def _handle_force_start(
+    callback: CallbackQuery,
+    game_manager: GameManager,
+    db_session: AsyncSession,
+    current_user: User,
+    admin_role: AdminRole | None,
+) -> None:
+    session_id = LobbyCallback.unpack(callback.data).session_id
+    game_session = await find_by_id(db_session, session_id)
+    if game_session is None:
+        await callback.answer("Sesi game tidak ditemukan.", show_alert=True)
+        return
+
+    is_creator = game_session.created_by_user_id == current_user.id
+    if not (is_creator or admin_role is not None):
+        await callback.answer(
+            "Hanya pembuat lobby atau admin yang bisa force start.", show_alert=True
+        )
+        return
+
+    try:
+        await game_manager.force_start_lobby(
+            db_session, session_id=session_id, triggered_by_user_id=current_user.id
+        )
+        await callback.answer("Lobi dipaksa lanjut ke ready-check!")
+    except InsufficientPlayersError:
+        await callback.answer(
+            f"Pemain belum cukup (minimum {game_session.min_players}).", show_alert=True
+        )

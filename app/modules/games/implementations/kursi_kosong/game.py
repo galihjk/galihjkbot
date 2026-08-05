@@ -16,6 +16,7 @@ from app.modules.games.engine.context import GameContext
 from app.modules.games.engine.result import GameResult
 from app.modules.games.implementations.kursi_kosong import keyboards, state as game_state, texts
 from app.modules.games.implementations.kursi_kosong.metadata import (
+    CONTEST_WINDOW_SECONDS,
     KURSI_KOSONG_METADATA,
     MESSAGE_PAUSE_SECONDS,
     ROUND_TIMEOUT_SECONDS,
@@ -77,6 +78,17 @@ class KursiKosongGame(BaseGame):
             )
             return
 
+        # Satu pemain hanya boleh terikat ke satu kontes aktif dalam satu
+        # waktu -- klik ke kursi lain saat masih menunggu hasil kursi
+        # sebelumnya ditolak (bukan pindah otomatis), sesuai keputusan user.
+        active_contest_seat = game_state.user_active_contest_seat(state, user_id)
+        if active_contest_seat is not None and active_contest_seat != seat_number:
+            await callback.answer(
+                texts.ALREADY_CONTESTING_ALERT.format(seat=active_contest_seat),
+                show_alert=True,
+            )
+            return
+
         holder_id = game_state.seat_holder(state, seat_number)
         if holder_id is not None:
             await callback.answer(
@@ -85,24 +97,44 @@ class KursiKosongGame(BaseGame):
             )
             return
 
-        claimed = game_state.claim_seat(state, seat_number, user_id)
-        if not claimed:
-            await callback.answer(
-                texts.SEAT_TAKEN_ALERT.format(holder="pemain lain"), show_alert=True
-            )
+        joined, is_new = game_state.join_contest(state, seat_number, user_id)
+        if not joined:
+            # Klik dobel ke kontes yang sama -- tidak ada perubahan state,
+            # cukup jawab toast lagi.
+            await callback.answer(texts.CONTESTING_TOAST.format(seat=seat_number))
             return
 
         _save_state(context, state)
         await context.db_session.flush()
-        await callback.answer(texts.SEAT_CLAIMED_TOAST.format(seat=seat_number))
+
+        if is_new:
+            context.game_manager.schedule_timer(
+                context.session_id, f"contest:{seat_number}", CONTEST_WINDOW_SECONDS
+            )
+
+        await callback.answer(texts.CONTESTING_TOAST.format(seat=seat_number))
         await self._refresh_round_message(context, state)
 
-        if game_state.is_round_complete(state):
-            context.game_manager.cancel_turn_timeout(context.session_id)
-            await self._resolve_round(context)
-
     async def handle_timeout(self, context: GameContext, timer_key: str) -> None:
-        await self._resolve_round(context)
+        # timer_key berbentuk "turn:{session_id}:round" atau
+        # "turn:{session_id}:contest:{seat_number}" (lihat schedule_timer di
+        # game-development-guide.md §7).
+        parts = timer_key.split(":")
+        if parts[-1] == "round":
+            state = context.game_session.state_json
+            # Kontes yang masih menunggu (jendelanya belum habis) dipaksa
+            # selesai dulu supaya tidak ada kursi yang "menggantung" saat
+            # ronde ditutup -- timernya sendiri juga dibatalkan supaya tidak
+            # nembak lagi setelah state ronde berikutnya direset.
+            for seat_number in [int(n) for n in list(state["contests"])]:
+                context.game_manager.cancel_timer(
+                    context.session_id, f"contest:{seat_number}"
+                )
+                await self._settle_contest(context, seat_number)
+            await self._resolve_round(context)
+        elif parts[-2] == "contest":
+            seat_number = int(parts[-1])
+            await self._resolve_contest(context, seat_number)
 
     async def finish(self, context: GameContext, result: GameResult) -> None:
         return  # notifikasi kemenangan sudah dikirim di _resolve_round
@@ -135,7 +167,12 @@ class KursiKosongGame(BaseGame):
             state["round"], players, seat_total, ROUND_TIMEOUT_SECONDS
         )
         keyboard = keyboards.build_seat_keyboard(
-            context.session_id, state["round"], seat_total, state["seats"], players_by_id
+            context.session_id,
+            state["round"],
+            seat_total,
+            state["seats"],
+            players_by_id,
+            state["contests"],
         )
         try:
             await context.bot.edit_message_text(
@@ -161,7 +198,12 @@ class KursiKosongGame(BaseGame):
         seat_total = game_state.seat_count(state)
         players_by_id = {p.user_id: p.display_name for p in context.active_players}
         keyboard = keyboards.build_seat_keyboard(
-            context.session_id, state["round"], seat_total, state["seats"], players_by_id
+            context.session_id,
+            state["round"],
+            seat_total,
+            state["seats"],
+            players_by_id,
+            state["contests"],
         )
         try:
             await context.bot.edit_message_reply_markup(
@@ -173,6 +215,57 @@ class KursiKosongGame(BaseGame):
             logger.exception(
                 "Gagal memperbarui keyboard kursi, session %s", context.session_id
             )
+
+    async def _resolve_contest(self, context: GameContext, seat_number: int) -> None:
+        """Dipanggil saat timer jendela kontes (1,2 detik) sebuah kursi
+        habis secara normal (bukan dipaksa oleh timeout ronde)."""
+        state = context.game_session.state_json
+        settled = await self._settle_contest(context, seat_number)
+        if not settled:
+            return  # sudah diresolve jalur lain (mis. dipaksa timeout ronde)
+
+        if game_state.is_round_complete(state):
+            context.game_manager.cancel_turn_timeout(context.session_id)
+            await self._resolve_round(context)
+
+    async def _settle_contest(self, context: GameContext, seat_number: int) -> bool:
+        """Inti penyelesaian kontes satu kursi: tentukan pemenang (atau
+        langsung tetapkan kalau cuma 1 kontestan), simpan state, kirim
+        narasi kalau relevan. Dipakai baik oleh `_resolve_contest` (jalur
+        normal) maupun dipaksa dari `handle_timeout` saat ronde berakhir
+        lebih dulu. Return False kalau kontes sudah tidak ada (dobel proses)."""
+        state = context.game_session.state_json
+        contest = game_state.pop_contest(state, seat_number)
+        if contest is None:
+            return False
+
+        contestants = contest["contestants"]
+        winner_id = (
+            contestants[0]
+            if len(contestants) == 1
+            else game_state.pick_contest_winner(contestants)
+        )
+        game_state.claim_seat(state, seat_number, winner_id)
+        _save_state(context, state)
+        await context.db_session.flush()
+
+        if len(contestants) >= 2:
+            players_by_id = {p.user_id: p.display_name for p in context.active_players}
+            winner_name = players_by_id.get(winner_id, "?")
+            contestant_names = [players_by_id.get(uid, "?") for uid in contestants]
+            loser_names = [
+                players_by_id.get(uid, "?") for uid in contestants if uid != winner_id
+            ]
+            await context.bot.send_message(
+                context.telegram_chat_id,
+                texts.render_contest_result(
+                    seat_number, contestant_names, winner_name, loser_names
+                ),
+            )
+            await asyncio.sleep(MESSAGE_PAUSE_SECONDS)
+
+        await self._refresh_round_message(context, state)
+        return True
 
     async def _close_round_message(self, context: GameContext, state: dict) -> None:
         """Tutup pesan ronde yang baru selesai: ganti jadi snapshot kursi

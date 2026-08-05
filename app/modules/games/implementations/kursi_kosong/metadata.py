@@ -6,6 +6,7 @@ ROUND_TIMEOUT_SECONDS = 15
 MESSAGE_PAUSE_SECONDS = 2       # jeda umum antar-pesan berurutan dalam game
 SEAT_REVEAL_MIN_SECONDS = 3     # jeda acak sebelum keyboard kursi dimunculkan (batas bawah)
 SEAT_REVEAL_MAX_SECONDS = 5     # jeda acak sebelum keyboard kursi dimunculkan (batas atas)
+CONTEST_WINDOW_SECONDS = 1.2    # jendela rebutan kursi (§12 desain)
 
 KURSI_KOSONG_METADATA = GameMetadata(
     key="kursi_kosong",

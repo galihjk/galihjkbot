@@ -53,6 +53,7 @@ class GameEventType(str, Enum):
     PLAYER_JOINED = "player_joined"
     PLAYER_LEFT = "player_left"
     LOBBY_EXTENDED = "lobby_extended"
+    LOBBY_FORCE_STARTED = "lobby_force_started"
     READY_CHECK_STARTED = "ready_check_started"
     PLAYER_READY = "player_ready"
     PLAYER_KICKED_NOT_READY = "player_kicked_not_ready"

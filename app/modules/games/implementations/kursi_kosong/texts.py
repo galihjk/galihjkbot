@@ -15,6 +15,8 @@ SEAT_TAKEN_ALERT = "Kursi ini sudah ditempati {holder}. Pilih kursi lain!"
 NOT_IN_GAME_ALERT = "Kamu tidak dalam permainan ini."
 STALE_ROUND_ALERT = "Tampilan ini sudah kedaluwarsa. Gunakan tombol pada pesan terbaru."
 SEAT_CLAIMED_TOAST = "✅ Kursi {seat} berhasil diamankan!"
+CONTESTING_TOAST = "⚔️ Kamu sedang memperebutkan Kursi {seat}."
+ALREADY_CONTESTING_ALERT = "Kamu masih menunggu hasil rebutan Kursi {seat} sebelumnya. Selesaikan itu dulu."
 
 
 def render_round_waiting(
@@ -67,6 +69,33 @@ def render_round_closed(
         holder_name = players_by_id.get(holder_id, "?") if holder_id is not None else "(kosong)"
         lines.append(f"🪑 {number} · {holder_name}")
     return "\n".join(lines)
+
+
+def render_contest_result(
+    seat_number: int,
+    contestant_names: list[str],
+    winner_name: str,
+    loser_names: list[str],
+) -> str:
+    """Narasi rebutan kursi (dikirim SATU KALI saat kontes selesai, bukan
+    tiap klik individual, sesuai §23 desain). Kalimat pembuka beda untuk 2
+    orang vs lebih dari 2 (§14 desain)."""
+    if len(contestant_names) == 2:
+        intro = (
+            f"💥 {contestant_names[0]} dan {contestant_names[1]} tiba di Kursi "
+            f"{seat_number} hampir bersamaan. Satu kursi, dua ambisi, nol musyawarah."
+        )
+    else:
+        intro = (
+            f"🚨 {len(contestant_names)} pemain menyerbu Kursi {seat_number}. "
+            f"Kursinya satu, rasa percaya diri mereka ber-{len(contestant_names)}."
+        )
+    losers_text = ", ".join(loser_names)
+    outro = (
+        f"🏆 {winner_name} berhasil mengamankan Kursi {seat_number}! {losers_text} "
+        "kembali berdiri sambil berpura-pura tidak kecewa."
+    )
+    return f"{intro}\n{outro}"
 
 
 def render_round_result(eliminated_name: str | None, survivor_names: list[str]) -> str:

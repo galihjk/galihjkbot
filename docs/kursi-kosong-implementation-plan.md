@@ -73,7 +73,7 @@ Diverifikasi lewat integration test ad-hoc (urutan & timestamp nyata tiap `send_
 
 ---
 
-## Tahap 2 — Mekanisme rebutan kursi yang sesungguhnya
+## Tahap 2 — Mekanisme rebutan kursi yang sesungguhnya — ✅ SELESAI (2026-08-05)
 
 **Sebelum mulai, pertahankan pola yang sudah ada di Tahap 1** (jangan bikin ulang dari nol):
 - Resolusi identitas pemain di `handle_callback` tetap pakai `context.acting_user_id` (guide §4) — kontes multi-pemain berarti banyak callback masuk untuk kursi yang sama, pastikan tiap pemain yang ikut kontes teridentifikasi lewat `acting_user_id` masing-masing, bukan `callback.from_user.id`.
@@ -90,6 +90,8 @@ Ganti first-click-wins dengan mekanisme dari desain §11-13:
 6. Callback notification (toast, bukan pesan baru) untuk klik biasa: "Kamu sedang memperebutkan Kursi 4" → "Kamu berhasil mengamankan Kursi 4."
 
 **Definition of done:** test konkurensi dengan **>2 pemain klik kursi yang sama dalam jendela 1.2 detik** (pakai `asyncio.sleep` kecil di antara klik dalam test untuk simulasi selisih waktu, bukan benar-benar bersamaan persis) — pastikan SEMUA peserta tercatat masuk kontes (bukan cuma 2 pertama), dan hasil akhir konsisten dengan bobot (jalankan berkali-kali dengan seed berbeda untuk cek distribusi kasar, bukan cuma 1 kali).
+
+**Status implementasi:** selesai, di `app/modules/games/implementations/kursi_kosong/` (`state.py`, `game.py`, `keyboards.py`, `texts.py`, `metadata.py`). Dua gap yang tidak dijelaskan eksplisit di dokumen desain sudah diputuskan bersama user sebelum coding: (1) klik ke kursi lain saat masih terikat kontes kursi sebelumnya DITOLAK (bukan pindah otomatis); (2) toast "berhasil mengamankan kursi" dari desain diganti jadi pesan grup + label kursi ter-update, karena kontes di-resolve lewat timer (tidak ada callback aktif untuk dijawab saat itu — keterbatasan API Telegram). Timer ronde (`handle_timeout` untuk `timer_key` berakhiran `:round`) memaksa selesaikan semua kontes yang masih pending dulu sebelum menutup ronde, supaya tidak ada kursi yang menggantung kalau jendela kontes 1,2 detik ternyata lebih panjang dari sisa waktu ronde. Diverifikasi lewat integration test ad-hoc: kontes 1/2/4 kontestan, klik dobel ke kontes sama, klik-pindah-kursi ditolak, distribusi bobot 4000 percobaan (hasil ~28,8%/23-25% vs target 29,4%/23,5%), kontes dipaksa selesai saat round timeout, regresi penuh 3 pemain sampai `FINISHED` — detail lengkap di `development-history.md`.
 
 ---
 

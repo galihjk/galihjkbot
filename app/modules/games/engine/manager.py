@@ -10,6 +10,7 @@ from sqlalchemy.orm.attributes import flag_modified
 from app.core.enums import GameEventType, GamePlayerStatus, GameStatus
 from app.core.exceptions import (
     ActiveGameExistsError,
+    InsufficientPlayersError,
     InvalidGameStateError,
     PlayerAlreadyJoinedError,
     PlayerLimitReachedError,
@@ -227,6 +228,35 @@ class GameManager:
             self._schedule_lobby_timeout(session_id, game.metadata.lobby_timeout_seconds)
             await self._refresh_lobby_message(db_session, game_session)
             await db_session.commit()
+            return game_session
+
+    async def force_start_lobby(
+        self, db_session: AsyncSession, *, session_id: int, triggered_by_user_id: int
+    ) -> GameSession:
+        lock = self._locks.get(session_id)
+        async with lock:
+            game_session = await game_repository.find_by_id(db_session, session_id)
+            if game_session is None:
+                raise SessionNotFoundError(str(session_id))
+            if game_session.status != GameStatus.LOBBY.value:
+                raise InvalidGameStateError(game_session.status)
+
+            game = self._registry.get(game_session.game_key)
+            active_players = await game_repository.find_active_players(
+                db_session, session_id
+            )
+            if len(active_players) < game.metadata.min_players:
+                raise InsufficientPlayersError(str(session_id))
+
+            self._timers.cancel(f"lobby:{session_id}")
+            await game_repository.log_event(
+                db_session,
+                session_id,
+                GameEventType.LOBBY_FORCE_STARTED.value,
+                actor_user_id=triggered_by_user_id,
+            )
+
+            await self._begin_ready_check(db_session, game_session, game, active_players)
             return game_session
 
     async def mark_ready(

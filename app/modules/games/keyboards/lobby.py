@@ -20,6 +20,7 @@ def build_lobby_keyboard(session_id: int) -> InlineKeyboardMarkup:
         inline_keyboard=[
             [_btn("➕ Gabung", "join"), _btn("➖ Keluar", "leave")],
             [_btn("⏱ Extend", "extend")],
+            [_btn("🚀 Force Start", "force_start")],
             [_btn("❌ Batalkan", "cancel")],
         ]
     )

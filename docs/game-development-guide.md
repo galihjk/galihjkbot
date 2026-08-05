@@ -63,13 +63,17 @@ def create_game_registry(settings: Settings) -> GameRegistry:
 /game <key>  (atau pilih dari menu /game)
       │
       ▼
-   LOBBY  ──(➕ Gabung / ➖ Keluar / ⏱ Extend / ❌ Batalkan)──┐
+   LOBBY  ──(➕ Gabung / ➖ Keluar / ⏱ Extend / 🚀 Force Start / ❌ Batalkan)──┐
       │                                                    │
       │ pembuat OTOMATIS ikut join saat lobby dibuat        │
       │ 60 detik (default), bisa di-extend TANPA BATAS      │
       │ oleh siapapun yang sudah join                       │
+      │ 🚀 Force Start (khusus pembuat lobi/admin, sama      │
+      │ seperti ❌ Batalkan) melewati SISA WAKTU lobi kalau  │
+      │ pemain sudah ≥ minimum -- langsung ke ready-check    │
+      │ di bawah, TIDAK melewati ready-check itu sendiri     │
       ▼                                                    │
-  waktu habis?                                             │
+  waktu habis? (atau di-force-start)                        │
       ├─ pemain < minimum ──────────► CANCELLED ◄───────────┘
       │                              (pesan ramah, mention yang
       │                               sudah join, ajak undang teman,
@@ -295,6 +299,8 @@ context.game_manager.cancel_timer(context.session_id, "contest:4")
 Saat timer berbunyi, `GameManager` otomatis membangun `GameContext` **baru** (dengan `db_session` baru dari session_factory-nya sendiri, bukan session request yang sudah lama ditutup) dan memanggil `YourGame.handle_timeout(context, timer_key)` — `timer_key` berbentuk `f"turn:{session_id}:{name}"` (untuk `schedule_turn_timeout`, `name` selalu `"round"`). Kalau kamu punya beberapa timer sekaligus, `handle_timeout` bisa membedakan mana yang berbunyi lewat isi `timer_key` (misal cek `"contest:" in timer_key`). Kamu tidak perlu — dan tidak bisa — pakai `db_session` yang sama dengan yang dipakai saat menjadwalkan; selalu terima `db_session` baru dari `context` yang diberikan ke `handle_timeout`.
 
 **Kalau bikin timer generik baru sendiri (bukan lewat `schedule_timer`/`schedule_turn_timeout`)**: pelajari dulu bug self-cancellation yang pernah terjadi di `TimerRegistry` (riwayat pengembangan) — intinya, kalau kode di dalam sebuah timer task memicu `cancel_session()`/`cancel_game()` untuk sesi yang sama, task itu bisa membatalkan DIRINYA SENDIRI di tengah eksekusi sebelum selesai commit. `TimerRegistry.cancel()` sudah dijaga (skip kalau target adalah `asyncio.current_task()`), tapi kalau kamu menulis mekanisme timer/lock BARU di luar `TimerRegistry`, waspada pola yang sama.
+
+**Pola: timer "induk" memaksa selesaikan timer "anak" yang masih pending.** Kalau game kamu punya timer bersarang (misal timer ronde generik + beberapa timer kontes per-kursi di Kursi Kosong Tahap 2), timer yang jendelanya lebih pendek bisa saja belum sempat berbunyi ketika timer yang lebih besar (ronde) sudah habis lebih dulu. Jangan biarkan yang belum selesai itu menggantung (atau menembak nanti setelah state ronde sudah direset) — di `handle_timeout` untuk timer induk, iterasi semua timer anak yang masih ada di `state_json`, `cancel_timer(session_id, name_anak)` supaya tidak nembak dobel, lalu panggil logic resolve-nya secara langsung (bukan lewat timer). Lihat `KursiKosongGame._settle_contest`/`handle_timeout` sebagai contoh konkret: dipanggil baik oleh timer kontes normal maupun dipaksa oleh timer ronde.
 
 **Soal granularitas lock — ini BUKAN gap, sengaja begitu:** desain Kursi Kosong (§34 di dokumen desainnya) mengusulkan lock terpisah per ronde/pemain/kursi. Engine kita cuma punya **satu lock per session** (`GameLockManager`, lihat §14 di bawah). Ini tetap cukup karena bot berjalan sebagai **satu proses Python saja** (bukan multi-worker) — satu lock per session sudah menyerialkan SEMUA mutasi untuk session itu, granularitas lebih halus baru penting kalau suatu saat ada lebih dari satu proses mengakses database yang sama secara paralel. Jangan bikin lock tambahan per-kursi/per-pemain kecuali arsitektur deployment berubah.
 

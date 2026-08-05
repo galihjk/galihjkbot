@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, String, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, String, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.core.enums import GamePlayerStatus
@@ -30,3 +30,4 @@ class GamePlayer(Base, TimestampMixin):
     joined_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
     left_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     eliminated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    eliminated_round: Mapped[int | None] = mapped_column(Integer, nullable=True)

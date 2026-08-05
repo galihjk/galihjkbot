@@ -10,12 +10,19 @@ from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.enums import GameEventType, GamePlayerStatus
-from app.database.repositories.game_repository import find_player, log_event
+from app.database.repositories.game_repository import find_all_players, find_player, log_event
+from app.database.repositories.user_repository import find_by_id as find_user_by_id
 from app.modules.games.callbacks import GameCallback
 from app.modules.games.engine.base_game import BaseGame
 from app.modules.games.engine.context import GameContext
 from app.modules.games.engine.result import GameResult
-from app.modules.games.implementations.kursi_kosong import keyboards, state as game_state, texts
+from app.modules.games.engine.score import ScoreBreakdown
+from app.modules.games.implementations.kursi_kosong import (
+    keyboards,
+    scoring,
+    state as game_state,
+    texts,
+)
 from app.modules.games.implementations.kursi_kosong.metadata import (
     CONTEST_WINDOW_SECONDS,
     KURSI_KOSONG_METADATA,
@@ -36,13 +43,24 @@ def _save_state(context: GameContext, state: dict) -> None:
     flag_modified(context.game_session, "state_json")
 
 
+# CATATAN: method di bawah pakai `context.db_session.commit()`, BUKAN cuma
+# `.flush()`, di setiap titik mutasi -- ronde Kursi Kosong berisi banyak
+# `asyncio.sleep()` (pacing) dan panggilan Telegram (bisa lambat/timeout
+# nyata, lihat development-history.md) di ANTARA mutasi-mutasi itu. Kalau
+# transaksi dibiarkan terbuka sepanjang itu, koneksi SQLite lain (mis. update
+# `users.last_seen_at` dari pesan pengguna LAIN yang lewat di waktu yang
+# sama) bisa gagal dengan "database is locked" begitu busy_timeout terlewati.
+# `expire_on_commit=False` di session_factory bikin commit di tengah jalan
+# ini aman -- objek ORM tetap valid & bisa terus dimutasi sesudahnya.
+
+
 class KursiKosongGame(BaseGame):
     metadata = KURSI_KOSONG_METADATA
 
     async def initialize(self, context: GameContext) -> None:
         alive_ids = [p.user_id for p in context.active_players]
         _save_state(context, game_state.build_initial_state(alive_ids))
-        await context.db_session.flush()
+        await context.db_session.commit()
 
     async def start(self, context: GameContext) -> None:
         await context.bot.send_message(context.telegram_chat_id, texts.WELCOME_TEXT)
@@ -87,7 +105,7 @@ class KursiKosongGame(BaseGame):
         # cabang (termasuk cabang yang return lebih awal di bawah).
         game_state.mark_action_taken(state, user_id)
         _save_state(context, state)
-        await context.db_session.flush()
+        await context.db_session.commit()
 
         # Satu pemain hanya boleh terikat ke satu kontes aktif dalam satu
         # waktu -- klik ke kursi lain saat masih menunggu hasil kursi
@@ -118,7 +136,7 @@ class KursiKosongGame(BaseGame):
             return
 
         _save_state(context, state)
-        await context.db_session.flush()
+        await context.db_session.commit()
 
         if is_new:
             context.game_manager.schedule_timer(
@@ -155,11 +173,62 @@ class KursiKosongGame(BaseGame):
     async def finish(self, context: GameContext, result: GameResult) -> None:
         return  # notifikasi kemenangan sudah dikirim di _resolve_round
 
+    async def calculate_scores(
+        self, context: GameContext, result: GameResult
+    ) -> dict[int, ScoreBreakdown]:
+        outcomes = await self._build_score_outcomes(context)
+        results = scoring.compute_scores(outcomes)
+        return {uid: res.breakdown for uid, res in results.items()}
+
+    async def _build_score_outcomes(self, context: GameContext) -> list[scoring.PlayerOutcome]:
+        state = context.game_session.state_json
+        initial_player_count = state.get(
+            "initial_player_count", len(context.active_players)
+        )
+        final_round = state["round"]
+        all_players = await find_all_players(context.db_session, context.session_id)
+        outcomes = []
+        for player in all_players:
+            if player.status not in (
+                GamePlayerStatus.WINNER.value,
+                GamePlayerStatus.ELIMINATED.value,
+                GamePlayerStatus.AFK.value,
+            ):
+                continue
+            outcomes.append(
+                scoring.PlayerOutcome(
+                    user_id=player.user_id,
+                    status=player.status,
+                    eliminated_round=player.eliminated_round,
+                    final_round=final_round,
+                    initial_player_count=initial_player_count,
+                )
+            )
+        return outcomes
+
+    async def _send_final_results(self, context: GameContext) -> None:
+        outcomes = await self._build_score_outcomes(context)
+        results = scoring.compute_scores(outcomes)
+        names_by_id: dict[int, str] = {}
+        for uid in results:
+            user = await find_user_by_id(context.db_session, uid)
+            names_by_id[uid] = (
+                user.display_name or user.first_name or "?" if user is not None else "?"
+            )
+        try:
+            await context.bot.send_message(
+                context.telegram_chat_id, texts.render_final_results(results, names_by_id)
+            )
+        except Exception:
+            logger.exception(
+                "Gagal mengirim hasil akhir & skor, session %s", context.session_id
+            )
+
     async def _begin_round(self, context: GameContext) -> None:
         state = context.game_session.state_json
         game_state.start_new_round(state)
         _save_state(context, state)
-        await context.db_session.flush()
+        await context.db_session.commit()
 
         players = [
             p for p in context.active_players if p.user_id in state["alive_user_ids"]
@@ -176,7 +245,7 @@ class KursiKosongGame(BaseGame):
         message = await context.bot.send_message(context.telegram_chat_id, waiting_text)
         state["round_message_id"] = message.message_id
         _save_state(context, state)
-        await context.db_session.flush()
+        await context.db_session.commit()
 
         # Kursi sengaja tidak langsung muncul bareng teks ronde -- beri jeda
         # acak dulu (kesan "musik akan segera dimulai"), baru teks DAN
@@ -213,7 +282,7 @@ class KursiKosongGame(BaseGame):
         # salah dicap AFK kalau ronde ditutup jauh lebih cepat dari wajar.
         state["ready_at"] = utcnow().isoformat()
         _save_state(context, state)
-        await context.db_session.flush()
+        await context.db_session.commit()
 
         context.game_manager.schedule_turn_timeout(
             context.session_id, ROUND_TIMEOUT_SECONDS
@@ -337,7 +406,7 @@ class KursiKosongGame(BaseGame):
         )
         game_state.claim_seat(state, seat_number, winner_id)
         _save_state(context, state)
-        await context.db_session.flush()
+        await context.db_session.commit()
 
         if len(contestants) >= 2:
             players_by_id = {p.user_id: p.display_name for p in context.active_players}
@@ -346,12 +415,18 @@ class KursiKosongGame(BaseGame):
             loser_names = [
                 players_by_id.get(uid, "?") for uid in contestants if uid != winner_id
             ]
-            await context.bot.send_message(
-                context.telegram_chat_id,
-                texts.render_contest_result(
-                    seat_number, contestant_names, winner_name, loser_names
-                ),
-            )
+            try:
+                await context.bot.send_message(
+                    context.telegram_chat_id,
+                    texts.render_contest_result(
+                        seat_number, contestant_names, winner_name, loser_names
+                    ),
+                )
+            except Exception:
+                logger.exception(
+                    "Gagal mengirim narasi kontes kursi %s, session %s",
+                    seat_number, context.session_id,
+                )
             await asyncio.sleep(MESSAGE_PAUSE_SECONDS)
 
         await self._refresh_round_message(context, state)
@@ -390,7 +465,7 @@ class KursiKosongGame(BaseGame):
 
         survivors, eliminated_ids = game_state.resolve_round(state)
         _save_state(context, state)
-        await context.db_session.flush()
+        await context.db_session.commit()
 
         # Jendela keadilan (MIN_ACTION_WINDOW_SECONDS): kalau ronde ini
         # selesai jauh lebih cepat dari wajar (kursi terakhir keburu penuh
@@ -417,6 +492,7 @@ class KursiKosongGame(BaseGame):
                     else GamePlayerStatus.ELIMINATED.value
                 )
                 player.eliminated_at = utcnow()
+                player.eliminated_round = state["round"]
             await log_event(
                 context.db_session,
                 context.session_id,
@@ -429,26 +505,47 @@ class KursiKosongGame(BaseGame):
             )
             name = players_by_id[uid].display_name if uid in players_by_id else "?"
             (afk_names if is_afk else normal_names).append(name)
-        await context.db_session.flush()
+        await context.db_session.commit()
 
         survivor_names = [
             players_by_id[uid].display_name
             for uid in survivors
             if uid in players_by_id
         ]
-        await context.bot.send_message(
-            context.telegram_chat_id,
-            texts.render_round_result(normal_names, afk_names, survivor_names),
-        )
+        try:
+            await context.bot.send_message(
+                context.telegram_chat_id,
+                texts.render_round_result(normal_names, afk_names, survivor_names),
+            )
+        except Exception:
+            logger.exception(
+                "Gagal mengirim narasi hasil ronde, session %s", context.session_id
+            )
         await asyncio.sleep(MESSAGE_PAUSE_SECONDS)
 
         if not survivors:
             # Kasus ekstrem: tidak ada satu kursi pun diklaim ronde ini --
             # semua pemain hidup tereliminasi bersamaan. MC umumkan tidak
             # ada pemenang (bukan jalur error/gagal §39 desain).
-            await context.bot.send_message(
-                context.telegram_chat_id, texts.render_no_winner()
-            )
+            #
+            # Kirim narasi dulu (dibungkus try/except, sama seperti panggilan
+            # Telegram lain di sini) -- kegagalan MENGIRIM PESAN tidak boleh
+            # sampai membatalkan `finish_game()` di bawah, karena itu yang
+            # mengubah status jadi FINISHED, commit skor, dan mengirim
+            # "Mau main lagi?" (lihat development-history.md: pernah ada
+            # TelegramNetworkError di sini yang bikin finish_game TIDAK
+            # PERNAH terpanggil).
+            try:
+                await context.bot.send_message(
+                    context.telegram_chat_id, texts.render_no_winner()
+                )
+            except Exception:
+                logger.exception(
+                    "Gagal mengirim pesan tanpa pemenang, session %s", context.session_id
+                )
+            await asyncio.sleep(MESSAGE_PAUSE_SECONDS)
+            await self._send_final_results(context)
+
             result = GameResult(
                 winner_user_id=None,
                 summary="Tidak ada pemenang",
@@ -462,14 +559,22 @@ class KursiKosongGame(BaseGame):
                 if winner_id in players_by_id
                 else "?"
             )
-            await context.bot.send_message(
-                context.telegram_chat_id, texts.render_winner(winner_name)
-            )
+            try:
+                await context.bot.send_message(
+                    context.telegram_chat_id, texts.render_winner(winner_name)
+                )
+            except Exception:
+                logger.exception(
+                    "Gagal mengirim pesan pemenang, session %s", context.session_id
+                )
 
             player = await find_player(context.db_session, context.session_id, winner_id)
             if player is not None:
                 player.status = GamePlayerStatus.WINNER.value
-            await context.db_session.flush()
+            await context.db_session.commit()
+
+            await asyncio.sleep(MESSAGE_PAUSE_SECONDS)
+            await self._send_final_results(context)
 
             result = GameResult(
                 winner_user_id=winner_id,

@@ -6,6 +6,7 @@ from typing import Any
 from app.modules.games.engine.context import GameContext
 from app.modules.games.engine.metadata import GameMetadata
 from app.modules.games.engine.result import GameResult
+from app.modules.games.engine.score import ScoreBreakdown
 
 
 class BaseGame(ABC):
@@ -41,3 +42,12 @@ class BaseGame(ABC):
     async def restore(self, context: GameContext) -> None:
         """Memulihkan game setelah restart."""
         raise NotImplementedError
+
+    async def calculate_scores(
+        self, context: GameContext, result: GameResult
+    ) -> dict[int, ScoreBreakdown]:
+        """Hitung skor akhir tiap pemain (dipanggil `GameManager.finish_game()`
+        sebelum commit ke `user_game_scores`). Default no-op (dict kosong) --
+        game yang tidak punya sistem skor (mis. `simple_game`) tidak perlu
+        override ini."""
+        return {}

@@ -13,6 +13,9 @@ def build_initial_state(alive_user_ids: list[int]) -> dict:
         "seats": {},
         "contests": {},
         "acted_user_ids": [],
+        # Jumlah pemain AWAL (bukan yang masih hidup) -- dipakai faktor skor
+        # jumlah pemain (§30 desain), tidak berubah sepanjang sesi.
+        "initial_player_count": len(alive_user_ids),
     }
 
 

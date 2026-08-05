@@ -3,6 +3,7 @@ from __future__ import annotations
 import random
 
 from app.modules.games.engine.context import PlayerInfo
+from app.modules.games.implementations.kursi_kosong.scoring import PlayerScoreResult
 
 WELCOME_TEXT = (
     "🎙️ Selamat datang di KURSI KOSONG! Permainan yang menguji kecepatan, "
@@ -199,3 +200,31 @@ def render_winner(winner_name: str) -> str:
         f"🏆 KITA PUNYA PEMENANG! {winner_name} berhasil menguasai kursi "
         "terakhir dan resmi menjadi Raja Furnitur hari ini!"
     )
+
+
+_MEDALS = ["🥇", "🥈", "🥉"]
+
+
+def render_final_results(
+    results: dict[int, PlayerScoreResult], names_by_id: dict[int, str]
+) -> str:
+    """Format hasil akhir + skor (§45 desain) -- diurutkan skor akhir
+    descending, medali untuk 3 teratas, baris AFK wajib menyebut angka
+    penalti eksplisit (§19), bukan cuma label "AFK"."""
+    ordered = sorted(
+        results.items(), key=lambda kv: kv[1].breakdown.final_score, reverse=True
+    )
+    lines = ["🏆 HASIL AKHIR KURSI KOSONG"]
+    for index, (user_id, res) in enumerate(ordered):
+        name = names_by_id.get(user_id, "?")
+        final = res.breakdown.final_score
+        if res.penalty is not None:
+            lines.append(f"💤 {name} (Penalti AFK {res.penalty} poin) - {final} poin")
+        else:
+            prefix = _MEDALS[index] if index < len(_MEDALS) else f"{index + 1}."
+            lines.append(f"{prefix} {name} — {final} poin")
+    lines.append("")
+    lines.append(
+        "Terima kasih sudah bermain. Kursi boleh habis, persahabatan semoga tidak."
+    )
+    return "\n".join(lines)

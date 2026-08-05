@@ -119,15 +119,23 @@ Diverifikasi lewat integration test ad-hoc: eliminasi 3 pemain sekaligus (5 pema
 
 ---
 
-## Tahap 4 — Skor & statistik
+## Tahap 4 — Skor & statistik — ✅ SELESAI (2026-08-05)
 
 1. Migration Alembic untuk `user_game_scores` (skema sudah disepakati di Tahap 0).
 2. `KursiKosongGame.calculate_scores()`: skor hasil (60/40/25/10 berdasar urutan eliminasi) + partisipasi (10 kalau ada aksi valid, 0 kalau AFK) + ketahanan (5 × jumlah ronde dilewati) × faktor jumlah pemain awal (1,00 / 1,15 / 1,30).
-3. **Aturan AFK menghanguskan skor**: kalau `player.status` pernah jadi `AFK` kapan pun selama sesi → skor akhir user itu = 0 (cek ini di `calculate_scores`, bukan di engine — spesifik game ini).
+3. ~~Aturan AFK menghanguskan skor: skor akhir = 0~~ — **SUDAH DIREVISI di desain §19 sebelum Tahap 4 dikerjakan** (item ini ditulis saat Tahap 0, sebelum revisi): AFK sekarang kena **penalti parsial** (`skor_sesi_afk = 0,5 × skor_ketahanan`), bukan hangus total — lihat formula lengkap di bagian "Status implementasi" bawah.
 4. `GameManager.finish_game()` commit skor idempoten (skip kalau `session_id` sudah pernah commit).
 5. Tampilkan hasil akhir dengan skor (desain §45 — format `🥇🥈🥉` + poin).
 
-**Definition of done:** test yang menjalankan game sampai selesai, verifikasi skor akhir tiap user sesuai formula, verifikasi commit tidak dobel kalau `finish_game` sampai terpanggil dua kali (edge case), verifikasi AFK dapat skor 0 walau sempat menang kontes sebelumnya.
+**Definition of done:** test yang menjalankan game sampai selesai, verifikasi skor akhir tiap user sesuai formula, verifikasi commit tidak dobel kalau `finish_game` sampai terpanggil dua kali (edge case), verifikasi AFK dapat skor sesuai formula penalti parsial (bukan otomatis 0) walau sempat menang kontes sebelumnya.
+
+**Status implementasi:** selesai. Data baru: `GamePlayer.eliminated_round` (migration `8bbf78e358b1`, dicatat di `_resolve_round` bersamaan `eliminated_at`), `state["initial_player_count"]` (dicatat di `build_initial_state`, dipakai faktor §30 — bukan jumlah hidup saat ini yang berubah tiap ronde). Tabel `user_game_scores` (migration yang sama) + model `UserGameScore`. Engine generik (`app/modules/games/engine/`): `ScoreBreakdown` dataclass baru (`score.py`), `BaseGame.calculate_scores()` (default no-op, `simple_game` tidak perlu override), `GameManager.finish_game()` panggil hook itu lalu `game_repository.commit_scores()` (idempoten — skip diam-diam kalau `session_id` sudah ada baris skornya). Logic murni Kursi Kosong ditaruh di modul baru `implementations/kursi_kosong/scoring.py` (`compute_scores()`, gampang ditest tanpa DB) — dipakai DUA jalur: `calculate_scores()` (utk commit DB) dan `_send_final_results()` di `game.py` (utk pesan hasil akhir, §45) supaya tidak ada logic ganda yang bisa divergen.
+
+**Revisi formula AFK (§19, ditemukan SUDAH direvisi di dokumen sebelum Tahap 4 mulai)**: bukan lagi "hangus total jadi 0" seperti rencana awal di atas — `skor_hasil_afk=0`, `skor_partisipasi_afk=0`, TAPI `skor_ketahanan_afk` tetap dihitung normal, lalu `penalty_afk = 10 + 0,5×skor_ketahanan_afk`, `skor_sesi_afk = 0,5×skor_ketahanan_afk` (bentuk sederhana). Pesan hasil akhir WAJIB menyebut angka penalti eksplisit untuk pemain AFK (`💤 {nama} — AFK setelah lewat N ronde, kena penalti P poin, skor akhir F poin`), bukan cuma label "AFK".
+
+**Gap baru yang ditemukan & diputuskan saat implementasi (dikonfirmasi user)**: desain §27 (tabel skor hasil 60/40/25/10 berdasar urutan eliminasi) ditulis dengan asumsi "tepat 1 tereliminasi/ronde" — asumsi itu sudah tidak berlaku sejak susulan revisi eliminasi (lihat entri sebelumnya, >1 pemain bisa tereliminasi bersamaan). Diputuskan: ranking dihitung dari RONDE eliminasi (diurutkan mundur, bukan dari jumlah pemain) — pemain yang tereliminasi BERSAMAAN di ronde yang sama mendapat **tier skor_hasil yang SAMA** (tidak dipisah/dirata-rata).
+
+Diverifikasi lewat integration test ad-hoc (SQLite file asli + `GameManager` sungguhan, scratchpad): skor dasar 3 pemain (ranking 60/40/25 tepat sesuai formula × faktor 1,00), skor AFK dengan penalti (cocok dengan CONTOH NUMERIK di desain §19: AFK ronde 1 → final 0, AFK setelah lewat 4 ronde → sesi 10 sebelum faktor), skor untuk eliminasi seri (3 pemain tereliminasi bersamaan dapat `result_score` yang identik), commit idempoten (panggil `commit_scores` kedua kali untuk session yang sama → `False`, tidak ada baris baru), faktor jumlah pemain (3/4→1,00, 5/6→1,15, 7/8→1,30), format tampilan (medali + kata "penalti"/"ronde" untuk AFK). Regresi Tahap 2/3/susulan-eliminasi/force-start dijalankan ulang, semua tetap lolos tanpa penyesuaian.
 
 ---
 

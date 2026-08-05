@@ -469,6 +469,12 @@ class GameManager:
         self.cancel_timer(session_id, "round")
 
     async def finish_game(self, context: GameContext, result) -> None:  # noqa: ANN001
+        # Commit di tiap titik (bukan cuma flush di akhir) -- ada panggilan
+        # ke Telegram (PLAY_AGAIN_HINT) setelah ini, dan hook game-spesifik
+        # (`finish`/`calculate_scores`) bisa saja lambat/gagal. Status
+        # FINISHED & skor harus sudah TERSIMPAN sebelum itu, supaya
+        # kegagalan jaringan tidak sampai membuat game "menggantung" (RUNNING
+        # selamanya) atau skor tidak ter-commit -- lihat development-history.md.
         game_session = context.game_session
         game_session.status = GameStatus.FINISHED.value
         game_session.finished_at = utcnow()
@@ -477,7 +483,7 @@ class GameManager:
             "summary": result.summary,
             "payload": result.payload,
         }
-        await context.db_session.flush()
+        await context.db_session.commit()
         await game_repository.log_event(
             context.db_session,
             game_session.id,
@@ -485,9 +491,20 @@ class GameManager:
             actor_user_id=result.winner_user_id,
             payload=result.payload,
         )
+        await context.db_session.commit()
 
         game = self._registry.get(game_session.game_key)
         await game.finish(context, result)
+
+        breakdown = await game.calculate_scores(context, result)
+        if breakdown:
+            await game_repository.commit_scores(
+                context.db_session,
+                game_key=game_session.game_key,
+                session_id=game_session.id,
+                breakdown=breakdown,
+            )
+            await context.db_session.commit()
 
         try:
             await context.bot.send_message(context.telegram_chat_id, PLAY_AGAIN_HINT)

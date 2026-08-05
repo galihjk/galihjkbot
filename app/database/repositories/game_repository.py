@@ -7,6 +7,7 @@ from app.core.enums import ACTIVE_GAME_STATUSES, GamePlayerStatus
 from app.database.models.game_event import GameEvent
 from app.database.models.game_player import GamePlayer
 from app.database.models.game_session import GameSession
+from app.database.models.user_game_score import UserGameScore
 from app.utils.datetime import utcnow
 
 _ACTIVE_PLAYER_STATUSES = {GamePlayerStatus.JOINED.value, GamePlayerStatus.ACTIVE.value}
@@ -101,6 +102,51 @@ async def find_active_players(
 
 async def count_active_players(session: AsyncSession, game_session_id: int) -> int:
     return len(await find_active_players(session, game_session_id))
+
+
+async def find_all_players(session: AsyncSession, game_session_id: int) -> list[GamePlayer]:
+    """Semua pemain yang pernah tercatat di sesi ini, status apa pun (WINNER,
+    ELIMINATED, AFK, LEFT, dst) -- dipakai untuk hitung skor akhir sesi."""
+    result = await session.execute(
+        select(GamePlayer).where(GamePlayer.game_session_id == game_session_id)
+    )
+    return list(result.scalars().all())
+
+
+async def commit_scores(
+    session: AsyncSession,
+    *,
+    game_key: str,
+    session_id: int,
+    breakdown: dict,
+) -> bool:
+    """Commit skor akhir tiap pemain, idempoten per `session_id` -- skip diam-diam
+    (return False, tidak insert apa pun) kalau sesi ini sudah pernah commit
+    sebelumnya (lihat game-development-guide.md §15). `breakdown` bebas
+    berupa objek apa pun asal punya atribut result_score/participation_score/
+    survival_score/final_score (lihat ScoreBreakdown di engine/score.py)."""
+    existing = await session.execute(
+        select(UserGameScore.id).where(UserGameScore.session_id == session_id).limit(1)
+    )
+    if existing.scalar_one_or_none() is not None:
+        return False
+
+    now = utcnow()
+    for user_id, score in breakdown.items():
+        session.add(
+            UserGameScore(
+                user_id=user_id,
+                game_key=game_key,
+                session_id=session_id,
+                result_score=score.result_score,
+                participation_score=score.participation_score,
+                survival_score=score.survival_score,
+                final_score=score.final_score,
+                committed_at=now,
+            )
+        )
+    await session.flush()
+    return True
 
 
 async def log_event(

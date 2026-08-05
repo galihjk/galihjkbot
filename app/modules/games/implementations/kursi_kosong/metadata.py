@@ -3,6 +3,9 @@ from __future__ import annotations
 from app.modules.games.engine.metadata import GameMetadata
 
 ROUND_TIMEOUT_SECONDS = 15
+MESSAGE_PAUSE_SECONDS = 2       # jeda umum antar-pesan berurutan dalam game
+SEAT_REVEAL_MIN_SECONDS = 3     # jeda acak sebelum keyboard kursi dimunculkan (batas bawah)
+SEAT_REVEAL_MAX_SECONDS = 5     # jeda acak sebelum keyboard kursi dimunculkan (batas atas)
 
 KURSI_KOSONG_METADATA = GameMetadata(
     key="kursi_kosong",

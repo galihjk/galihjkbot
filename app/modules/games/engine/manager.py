@@ -383,7 +383,12 @@ class GameManager:
     # ------------------------------------------------------------------
 
     async def handle_callback(
-        self, db_session: AsyncSession, *, session_id: int, callback: object
+        self,
+        db_session: AsyncSession,
+        *,
+        session_id: int,
+        callback: object,
+        acting_user_id: int | None = None,
     ) -> None:
         lock = self._locks.get(session_id)
         async with lock:
@@ -391,12 +396,19 @@ class GameManager:
             if game_session is None or game_session.status != GameStatus.RUNNING.value:
                 return
             game = self._registry.get(game_session.game_key)
-            context = await self._build_context(db_session, game_session)
+            context = await self._build_context(
+                db_session, game_session, acting_user_id=acting_user_id
+            )
             await game.handle_callback(context, callback)
             await db_session.commit()
 
     async def handle_message(
-        self, db_session: AsyncSession, *, session_id: int, message: object
+        self,
+        db_session: AsyncSession,
+        *,
+        session_id: int,
+        message: object,
+        acting_user_id: int | None = None,
     ) -> None:
         lock = self._locks.get(session_id)
         async with lock:
@@ -404,7 +416,9 @@ class GameManager:
             if game_session is None or game_session.status != GameStatus.RUNNING.value:
                 return
             game = self._registry.get(game_session.game_key)
-            context = await self._build_context(db_session, game_session)
+            context = await self._build_context(
+                db_session, game_session, acting_user_id=acting_user_id
+            )
             await game.handle_message(context, message)
             await db_session.commit()
 
@@ -636,6 +650,7 @@ class GameManager:
         db_session,  # noqa: ANN001
         game_session: GameSession,
         active_players: list[GamePlayer] | None = None,
+        acting_user_id: int | None = None,
     ) -> GameContext:
         if active_players is None:
             active_players = await game_repository.find_active_players(
@@ -652,6 +667,7 @@ class GameManager:
             telegram_chat_id=telegram_chat_id,
             game_manager=self,
             active_players=await self._to_player_infos(db_session, active_players),
+            acting_user_id=acting_user_id,
         )
 
     def _schedule_lobby_timeout(self, session_id: int, delay_seconds: float) -> None:

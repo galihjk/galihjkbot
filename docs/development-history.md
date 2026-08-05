@@ -146,3 +146,52 @@ Item lain di Tahap 0 (konvensi validasi round di callback, skema tabel `user_gam
 - main sampai ronde final → `FINISHED` dengan pemenang tunggal yang benar, ajakan main lagi terkirim otomatis.
 
 Item yang SENGAJA belum ada di Tahap 1 (menyusul di tahap berikutnya): jendela kontes/bobot rebutan (Tahap 2), status `AFK` beneran dipakai + narasi lengkap (Tahap 3), skor (Tahap 4), retry edit pesan & uji Telegram sungguhan (Tahap 5). Didaftarkan tanpa syarat environment di `bootstrap.py::create_game_registry()` — beda dari `simple_game` yang sengaja disembunyikan di production.
+
+---
+
+## Diskusi desain: skor AFK & penutupan pesan ronde lama
+
+Dua diskusi terpisah dengan user, hasilnya masuk ke dokumen desain/kode:
+
+**1. Skor AFK diubah dari "hangus total" jadi "penalti parsial".** User mempertanyakan: kalau AFK bisa terjadi karena masalah jaringan (bukan sengaja tidak main), apa adil skor sesi jadi 0 total (aturan lama §19/§31)? Setelah beberapa opsi dibahas (potong 50% flat, cuma hangus partisipasi, escalating penalty — yang terakhir ternyata tidak mungkin karena AFK sudah otomatis eliminasi permanen, tidak ada "AFK kedua" dalam sesi yang sama), disepakati formula: `skor_hasil_afk=0` (dipaksa, tidak ikut tabel §27), `penalty_afk = 10 + 0,5×(hasil+ketahanan)`, `skor_sesi_afk = 0,5×skor_ketahanan`. Hasilnya: pemain AFK tetap bawa pulang separuh skor ketahanan yang sudah didapat sebelum AFK, kehilangan skor hasil sepenuhnya, tidak pernah negatif. **Dokumen desain (`game-design-kursi-kosong.md` §19, §27-28, §31, §33, §45-46) sudah diperbarui** — belum ada kode (skor baru diimplementasikan di Tahap 4).
+
+**2. Pesan ronde lama sekarang ditutup, bukan dibiarkan.** User perhatikan: begitu ronde selesai, pesan "RONDE N DIMULAI" yang lama tetap ada dengan tombol yang kelihatan masih bisa dipencet (walau secara fungsi aman ditolak berkat validasi round dari Tahap 1). Ini gap yang belum tercatat di rencana manapun — ditemukan murni dari pertanyaan user, bukan dari studi desain sebelumnya. Setelah diskusi singkat soal pembagian peran pesan (pesan lama = snapshot data, pesan baru = narasi MC — supaya tidak dobel/spam), disepakati:
+- `KursiKosongGame._close_round_message()` (baru, di `game.py`) meng-edit pesan ronde lama jadi snapshot kursi final (`texts.render_round_closed` — cuma daftar kursi, tanpa narasi) dan melepas keyboard-nya (`InlineKeyboardMarkup(inline_keyboard=[])`).
+- Diberi jeda `ROUND_CLOSE_PAUSE_SECONDS = 2` detik (konstanta di `metadata.py`) sebelum pesan narasi hasil ronde (yang sudah ada sejak Tahap 1, terpisah) dikirim — supaya pemain merasakan "waktu habis"/"kursi keburu penuh" alih-alih semuanya muncul instan.
+- Berlaku di SEMUA ronde termasuk ronde final (sebelum pengumuman pemenang).
+
+**Diverifikasi lewat integration test ad-hoc** (SQLite file asli + FakeBot + pengukuran waktu nyata via `time.monotonic()`): pesan ronde lama terbukti di-edit dengan teks "RONDE N SELESAI" + daftar kursi yang benar dan `reply_markup` kosong; jeda nyata terukur ~2 detik (bukan cuma dipanggil, tapi benar-benar menunda pesan berikutnya); pesan narasi hasil ronde tetap terkirim terpisah setelah jeda; berlaku juga di ronde final. Test regresi 3 & 8 pemain (dari Tahap 1) dijalankan ulang dan tetap lolos (otomatis lebih lambat karena tambahan jeda per ronde, sesuai ekspektasi).
+
+---
+
+## Kursi Kosong: pacing menyeluruh setelah dicoba langsung ("kurang tegang")
+
+Setelah dua diskusi di atas, user langsung mencoba Tahap 1 dan komplain: pesan "Selamat datang..." langsung disusul pesan ronde 1 LENGKAP dengan tombol kursi, tanpa jeda sama sekali — padahal teksnya sendiri bilang "Musik akan segera dimulai!". Diskusi berlanjut ke ide user: kirim teks ronde dulu tanpa tombol, edit belakangan untuk memunculkan tombol (dikonfirmasi Telegram/aiogram mendukung ini — sama seperti pola `edit_message_reply_markup` yang sudah dipakai untuk MELEPAS keyboard, tinggal dibalik untuk MENAMBAHKAN).
+
+**Disepakati sebagai aturan pacing umum** (khusus pesan dalam-game, bukan pesan sistem lobi/ready-check di `GameManager`):
+1. Jeda 2 detik tiap kali bot kirim >1 pesan berturutan.
+2. Kursi/keyboard muncul belakangan lewat edit, dengan jeda ACAK 2-4 detik dari teks ronde (bukan flat, biar tidak gampang ditebak polanya).
+3. Timer 15 detik ronde dihitung SETELAH kursi muncul, bukan dari saat teks ronde dikirim (jeda pembukaan adalah waktu "mati" di luar 15 detik itu).
+
+**Diimplementasikan** di `app/modules/games/implementations/kursi_kosong/`:
+- `metadata.py`: `ROUND_CLOSE_PAUSE_SECONDS` (dari perubahan sebelumnya) di-rename jadi `MESSAGE_PAUSE_SECONDS=2` — ternyata itu instance pertama dari aturan pacing umum #1, jadi disatukan namanya. Tambah `SEAT_REVEAL_MIN_SECONDS=2`/`SEAT_REVEAL_MAX_SECONDS=4`.
+- `game.py::start()`: jeda `MESSAGE_PAUSE_SECONDS` setelah welcome, sebelum ronde 1.
+- `game.py::_begin_round()`: dipecah dua tahap — kirim teks ronde TANPA `reply_markup`, jeda `random.uniform(2,4)`, baru `edit_message_reply_markup` memasang keyboard, BARU `schedule_turn_timeout` dipanggil (dipindah dari posisi lama yang langsung setelah kirim pesan).
+- `game.py::_resolve_round()`: tambah jeda `MESSAGE_PAUSE_SECONDS` setelah narasi hasil ronde, sebelum lanjut ke ronde berikutnya ATAU pengumuman pemenang (satu titik jeda menutupi dua cabang sekaligus).
+- Pesan "Mau main lagi?" dari `GameManager.finish_game()` (generik) sengaja TIDAK diberi jeda — itu sistem, bukan dalam-game.
+
+**Diverifikasi lewat integration test ad-hoc** (SQLite file asli + FakeBot yang mencatat timestamp `time.monotonic()` tiap event): jeda welcome→ronde ~2 detik, jeda acak sebelum keyboard muncul dalam rentang 2-4 detik, jeda narasi→ronde berikutnya ~2 detik — semua terukur nyata (bukan cuma dipanggil). Test regresi 3 & 8 pemain (Tahap 1) dijalankan ulang, tetap lolos, otomatis lebih lambat (diharapkan, karena tambahan beberapa jeda per ronde).
+
+**Koreksi susulan (dari IDE selection user)**: user menunjuk baris "Silakan memilih kursi sebelum..." dan menunjukkan itu janggal — kalimat itu masih muncul di pesan FASE 1 (sebelum kursi/tombol ada), padahal timer belum mulai dan tombolnya belum bisa diklik sama sekali. Dipecah jadi dua fungsi teks: `render_round_waiting()` (fase 1, "Bersiaplah...", tanpa ajakan pilih kursi) dan `render_round_ready()` (fase 2, ajakan pilih kursi + hitungan waktu). `_begin_round()` diubah dari `edit_message_reply_markup` jadi `edit_message_text` untuk langkah reveal, supaya teks DAN keyboard berubah bareng di titik yang sama. Diverifikasi lewat integration test ad-hoc + regresi 3/8 pemain, tetap lolos. Catatan tambahan: user juga menyesuaikan sendiri beberapa angka pacing di kode (`MESSAGE_PAUSE_SECONDS+1` khusus jeda welcome→ronde 1, `SEAT_REVEAL_MIN/MAX_SECONDS` dari 2-4 jadi 3-5) — nilai-nilai itu dipertahankan apa adanya, bukan dikembalikan ke angka sebelumnya.
+
+---
+
+## Bug engine: persona (`/p1`-`/p7`) tidak dihormati di callback dalam-game
+
+**Ditemukan lewat testing manual user**: mencoba Kursi Kosong solo lewat `/p1`, klik kursi terasa "aneh", tapi ronde keburu habis sebelum sempat digali lebih jauh.
+
+**Investigasi** (`app/middlewares/persona.py`, `handlers/game_callbacks.py`, `handlers/lobby_callbacks.py`, `engine/manager.py`) menemukan akar masalah: `PersonaMiddleware` cuma menukar `data["current_user"]` — tidak pernah menyentuh `callback.from_user.id` (ID Telegram MENTAH pemilik akun yang benar-benar menekan tombol). Aksi LOBBY (`handle_lobby_callback`) sudah benar (pakai `current_user.id`), tapi aksi DALAM-GAME (`handle_game_callback` → `GameManager.handle_callback` → `game.handle_callback`) **tidak pernah menerima `current_user` sama sekali** — `KursiKosongGame` (dan `simple_game`, pola identik) resolve identitas lewat `callback.from_user.id` mentah. Akibatnya: kalau akun asli admin tidak ikut join sebagai pemain sendiri (pola testing solo yang umum), klik dengan persona APA PUN selalu dianggap "tidak dalam permainan" — bug ENGINE, bukan spesifik Kursi Kosong, cuma belum pernah ketahuan karena belum ada yang tes lewat persona sebelumnya.
+
+**Diperbaiki**: tambah `GameContext.acting_user_id: int | None` (`engine/context.py`) — identitas yang SUDAH lolos resolusi persona. Di-thread dari `handlers/game_callbacks.py` (tambah param `current_user: User`, pola identik `lobby_callbacks.py`) → `GameManager.handle_callback`/`handle_message` (param baru `acting_user_id`) → `_build_context`. `KursiKosongGame.handle_callback` diubah pakai `context.acting_user_id` langsung, helper `_resolve_user_id` (yang lama, berbasis `telegram_user_id` matching) dihapus karena jadi kode mati. `simple_game` **sengaja tidak diubah** (frozen, sama seperti bug validasi round yang juga dibiarkan) — didokumentasikan eksplisit di `game-development-guide.md` §4 supaya tidak dikira kelupaan.
+
+**Diverifikasi lewat integration test ad-hoc**: klik dengan `callback.from_user.id` SENGAJA tidak terkait pemain manapun (mensimulasikan akun asli admin), tapi `acting_user_id` diisi ID virtual player — kursi terbukti diklaim untuk `acting_user_id`, bukan `from_user.id`. Juga dites: tanpa `acting_user_id` (default `None`), klik ditolak "tidak dalam permainan" (tidak diam-diam fallback ke `from_user.id`). Regresi penuh 3 & 8 pemain (dengan `acting_user_id` dilewatkan eksplisit di tiap klik, mencerminkan cara router produksi memanggilnya) tetap lolos. Verifikasi end-to-end lewat dispatcher aiogram sungguhan (bukan panggilan langsung ke `GameManager`) belum dilakukan — direkomendasikan coba manual lewat `/p1`.."/p7" di Telegram sungguhan.

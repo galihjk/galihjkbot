@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
 import logging
+import random
 from typing import Any
 
+from aiogram.types import InlineKeyboardMarkup
 from sqlalchemy.orm.attributes import flag_modified
 
 from app.core.enums import GameEventType, GamePlayerStatus
@@ -14,7 +17,10 @@ from app.modules.games.engine.result import GameResult
 from app.modules.games.implementations.kursi_kosong import keyboards, state as game_state, texts
 from app.modules.games.implementations.kursi_kosong.metadata import (
     KURSI_KOSONG_METADATA,
+    MESSAGE_PAUSE_SECONDS,
     ROUND_TIMEOUT_SECONDS,
+    SEAT_REVEAL_MAX_SECONDS,
+    SEAT_REVEAL_MIN_SECONDS,
 )
 from app.utils.datetime import utcnow
 
@@ -37,6 +43,7 @@ class KursiKosongGame(BaseGame):
 
     async def start(self, context: GameContext) -> None:
         await context.bot.send_message(context.telegram_chat_id, texts.WELCOME_TEXT)
+        await asyncio.sleep(MESSAGE_PAUSE_SECONDS+1)
         await self._begin_round(context)
 
     async def handle_message(self, context: GameContext, message: Any) -> None:
@@ -58,7 +65,7 @@ class KursiKosongGame(BaseGame):
             return
 
         seat_number = int(seat_str)
-        user_id = self._resolve_user_id(context, callback.from_user.id)
+        user_id = context.acting_user_id
         if user_id is None or user_id not in state["alive_user_ids"]:
             await callback.answer(texts.NOT_IN_GAME_ALERT, show_alert=True)
             return
@@ -112,18 +119,35 @@ class KursiKosongGame(BaseGame):
         seat_total = game_state.seat_count(state)
         players_by_id = {p.user_id: p.display_name for p in context.active_players}
 
-        text = texts.render_round_start(
+        waiting_text = texts.render_round_waiting(state["round"], players, seat_total)
+        message = await context.bot.send_message(context.telegram_chat_id, waiting_text)
+        state["round_message_id"] = message.message_id
+        _save_state(context, state)
+        await context.db_session.flush()
+
+        # Kursi sengaja tidak langsung muncul bareng teks ronde -- beri jeda
+        # acak dulu (kesan "musik akan segera dimulai"), baru teks DAN
+        # keyboard sama-sama diganti lewat edit. Timer 15 detik dihitung
+        # SETELAH kursi muncul, bukan dari saat teks ronde dikirim.
+        await asyncio.sleep(random.uniform(SEAT_REVEAL_MIN_SECONDS, SEAT_REVEAL_MAX_SECONDS))
+
+        ready_text = texts.render_round_ready(
             state["round"], players, seat_total, ROUND_TIMEOUT_SECONDS
         )
         keyboard = keyboards.build_seat_keyboard(
             context.session_id, state["round"], seat_total, state["seats"], players_by_id
         )
-        message = await context.bot.send_message(
-            context.telegram_chat_id, text, reply_markup=keyboard
-        )
-        state["round_message_id"] = message.message_id
-        _save_state(context, state)
-        await context.db_session.flush()
+        try:
+            await context.bot.edit_message_text(
+                ready_text,
+                chat_id=context.telegram_chat_id,
+                message_id=state["round_message_id"],
+                reply_markup=keyboard,
+            )
+        except Exception:
+            logger.exception(
+                "Gagal memunculkan keyboard kursi, session %s", context.session_id
+            )
 
         context.game_manager.schedule_turn_timeout(
             context.session_id, ROUND_TIMEOUT_SECONDS
@@ -150,8 +174,37 @@ class KursiKosongGame(BaseGame):
                 "Gagal memperbarui keyboard kursi, session %s", context.session_id
             )
 
+    async def _close_round_message(self, context: GameContext, state: dict) -> None:
+        """Tutup pesan ronde yang baru selesai: ganti jadi snapshot kursi
+        final (tanpa tombol), lalu beri jeda supaya terasa "waktu habis"
+        sebelum narasi hasil ronde dikirim di pesan terpisah."""
+        message_id = state.get("round_message_id")
+        if message_id is None:
+            return
+
+        seat_total = game_state.seat_count(state)
+        players_by_id = {p.user_id: p.display_name for p in context.active_players}
+        closed_text = texts.render_round_closed(
+            state["round"], seat_total, state["seats"], players_by_id
+        )
+        try:
+            await context.bot.edit_message_text(
+                closed_text,
+                chat_id=context.telegram_chat_id,
+                message_id=message_id,
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[]),
+            )
+        except Exception:
+            logger.exception(
+                "Gagal menutup pesan ronde, session %s", context.session_id
+            )
+        await asyncio.sleep(MESSAGE_PAUSE_SECONDS)
+
     async def _resolve_round(self, context: GameContext) -> None:
         state = context.game_session.state_json
+
+        await self._close_round_message(context, state)
+
         survivors, eliminated_user_id = game_state.resolve_round(state)
         _save_state(context, state)
         await context.db_session.flush()
@@ -188,6 +241,7 @@ class KursiKosongGame(BaseGame):
             context.telegram_chat_id,
             texts.render_round_result(eliminated_name, survivor_names),
         )
+        await asyncio.sleep(MESSAGE_PAUSE_SECONDS)
 
         if len(survivors) <= 1:
             winner_id = survivors[0] if survivors else None
@@ -216,12 +270,6 @@ class KursiKosongGame(BaseGame):
             await context.game_manager.finish_game(context, result)
         else:
             await self._begin_round(context)
-
-    def _resolve_user_id(self, context: GameContext, telegram_user_id: int) -> int | None:
-        for player in context.active_players:
-            if player.telegram_user_id == telegram_user_id:
-                return player.user_id
-        return None
 
     def _display_name(self, context: GameContext, user_id: int) -> str:
         for player in context.active_players:

@@ -27,6 +27,7 @@ class GameContext:
     telegram_chat_id: int
     game_manager: "GameManager"
     active_players: list[PlayerInfo] = field(default_factory=list)
+    acting_user_id: int | None = None
 
     @property
     def session_id(self) -> int:

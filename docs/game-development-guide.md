@@ -157,12 +157,26 @@ class GameContext:
     telegram_chat_id: int              # chat Telegram tempat game berjalan
     game_manager: GameManager           # untuk schedule_turn_timeout / cancel_turn_timeout / finish_game
     active_players: list[PlayerInfo]    # snapshot pemain aktif SAAT context dibuat
+    acting_user_id: int | None          # user.id (internal) yang MELAKUKAN aksi ini, None kalau dari timer
 
     @property
     def session_id(self) -> int: ...   # shortcut ke game_session.id
 ```
 
 `PlayerInfo` cuma punya `user_id` (internal), `telegram_user_id`, `display_name` — dipakai untuk mention/tampilan, **bukan** untuk query DB (kalau butuh data user lengkap, query sendiri lewat `user_repository`).
+
+**`acting_user_id` — WAJIB dipakai untuk resolusi identitas di `handle_callback`/`handle_message`, JANGAN pakai `callback.from_user.id` manual.** Field ini sudah lolos resolusi persona (`/p1`..`/p7`, lihat `app/middlewares/persona.py`) lewat `current_user.id` yang di-thread dari router (`handlers/game_callbacks.py`) ke `GameManager.handle_callback(..., acting_user_id=...)` ke `_build_context`. Kalau kamu resolve identitas sendiri dari `callback.from_user.id` (ID Telegram MENTAH dari akun yang benar-benar menekan tombol), testing solo lewat persona tidak akan pernah berfungsi — klik dengan persona apa pun akan selalu dianggap berasal dari akun ASLI, bukan virtual player yang sedang diperankan. Ini bug nyata yang ditemukan & diperbaiki di Kursi Kosong (lihat riwayat pengembangan) — pola yang benar:
+```python
+async def handle_callback(self, context: GameContext, callback) -> None:
+    user_id = context.acting_user_id
+    if user_id is None or user_id not in state["alive_user_ids"]:
+        await callback.answer("Kamu tidak dalam permainan ini.", show_alert=True)
+        return
+    ...
+```
+`acting_user_id` cuma `None` kalau context dibangun dari timer (`handle_timeout`) — timeout memang tidak punya "pelaku". Untuk `handle_callback`/`handle_message`, selama router-nya benar (ikuti pola `handlers/game_callbacks.py` yang sudah ada), field ini selalu terisi.
+
+**Catatan soal `simple_game`:** game itu masih pakai pola lama (`callback.from_user.id` manual) dan SENGAJA tidak diikutkan perbaikan ini — sesuai kebijakan frozen ("jangan dikembangkan lagi"). Jadi testing solo lewat persona untuk `simple_game` tetap tidak akan berfungsi benar; ini bukan kelupaan, cuma tidak diprioritaskan karena game itu memang cuma buat uji fondasi engine.
 
 **Penting soal `active_players`:** ini snapshot yang diambil SEKALI saat `GameManager` membangun context untuk pemanggilan ini. Kalau kamu mengeliminasi seorang pemain di tengah `handle_callback`, `context.active_players` **tidak otomatis ter-update** — pola yang benar (lihat `SimpleGame._begin_round`) adalah selalu filter terhadap `state["alive_user_ids"]` (yang KAMU kelola sendiri di `state_json`) sebagai sumber kebenaran, dan pakai `context.active_players` cuma sebagai kamus nama untuk lookup display_name.
 

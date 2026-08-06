@@ -29,6 +29,7 @@ from app.modules.games.engine.lobby import (
 from app.modules.games.engine.lock_manager import GameLockManager
 from app.modules.games.engine.registry import GameRegistry
 from app.modules.games.engine.timer import TimerRegistry
+from app.modules.games.private_input import clear_session_private_inputs
 from app.modules.games.keyboards.lobby import build_lobby_keyboard, build_ready_check_keyboard
 from app.utils.datetime import utcnow
 
@@ -358,6 +359,7 @@ class GameManager:
 
         self._timers.cancel_session(session_id)
         self._locks.remove(session_id)
+        clear_session_private_inputs(session_id)
 
         group = await group_repository.find_by_id(db_session, game_session.group_id)
         if group is not None:
@@ -467,6 +469,14 @@ class GameManager:
             await game.handle_message(context, message)
             await db_session.commit()
 
+    def lock_session(self, session_id: int):
+        """Lock yang sama dipakai `handle_callback`/`handle_message` --
+        dipakai juga oleh dispatcher deep link (`app/modules/games/deep_link.py`)
+        supaya mutasi `state_json` lewat `/start` (yang berjalan di LUAR
+        `handle_callback`/`handle_message`, jadi tidak otomatis terkunci)
+        tetap diserialkan per-session."""
+        return self._locks.get(session_id)
+
     def schedule_timer(self, session_id: int, name: str, delay_seconds: float) -> None:
         self._timers.schedule(
             f"turn:{session_id}:{name}",
@@ -530,6 +540,7 @@ class GameManager:
 
         self._timers.cancel_session(game_session.id)
         self._locks.remove(game_session.id)
+        clear_session_private_inputs(game_session.id)
 
     # ------------------------------------------------------------------
     # Recovery setelah restart (dipanggil sekali saat startup, sebelum
@@ -605,6 +616,7 @@ class GameManager:
 
             self._timers.cancel_session(session_id)
             self._locks.remove(session_id)
+            clear_session_private_inputs(session_id)
 
             group = await group_repository.find_by_id(db_session, game_session.group_id)
             if group is not None:

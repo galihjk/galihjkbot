@@ -17,6 +17,7 @@ from app.modules.devtools.router import get_router as get_devtools_router
 from app.modules.leaderboard.router import get_router as get_leaderboard_router
 from app.modules.games.engine.manager import GameManager
 from app.modules.games.engine.registry import GameRegistry
+from app.modules.games.implementations.kuis_kenal.game import KuisKenalGame
 from app.modules.games.implementations.kursi_kosong.game import KursiKosongGame
 from app.modules.games.implementations.simple_game.game import SimpleGame
 from app.modules.games.router import get_router as get_games_router
@@ -28,6 +29,9 @@ def create_game_registry(settings: Settings) -> GameRegistry:
     # muncul di /games atau bisa dipanggil lewat /game.
     if settings.app_env != "production":
         registry.register(SimpleGame())
+        # Kuis Kenal masih dalam pengembangan -- disembunyikan di production
+        # sampai test manual Telegram (Tahap 11 rencana implementasi) selesai.
+        registry.register(KuisKenalGame())
     registry.register(KursiKosongGame())
     return registry
 

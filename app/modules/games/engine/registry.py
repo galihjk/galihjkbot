@@ -22,3 +22,13 @@ class GameRegistry:
 
     def get_enabled(self) -> list[BaseGame]:
         return [game for game in self._games.values() if game.metadata.enabled]
+
+    def find_by_deep_link_prefix(self, payload: str) -> BaseGame | None:
+        """Cari game yang punya `deep_link_prefix` dan cocok dengan awal
+        `payload` `/start` -- dipakai dispatcher deep link generik
+        (`app/modules/games/deep_link.py`), bukan hanya untuk satu game."""
+        for game in self._games.values():
+            prefix = game.metadata.deep_link_prefix
+            if prefix and payload.startswith(prefix):
+                return game
+        return None

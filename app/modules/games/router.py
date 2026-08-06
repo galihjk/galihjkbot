@@ -11,6 +11,7 @@ def get_router() -> Router:
         game_callbacks,
         howtoplay,
         lobby_callbacks,
+        private_game_messages,
     )
 
     return router

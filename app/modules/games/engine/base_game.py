@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from app.modules.games.engine.context import GameContext
 from app.modules.games.engine.metadata import GameMetadata
 from app.modules.games.engine.result import GameResult
 from app.modules.games.engine.score import ScoreBreakdown
+
+if TYPE_CHECKING:
+    from app.modules.games.engine.manager import GameManager
 
 
 class BaseGame(ABC):
@@ -51,3 +54,20 @@ class BaseGame(ABC):
         game yang tidak punya sistem skor (mis. `simple_game`) tidak perlu
         override ini."""
         return {}
+
+    async def handle_deep_link(
+        self,
+        payload: str,
+        *,
+        message: Any,
+        db_session: Any,
+        acting_user_id: int,
+        game_manager: "GameManager",
+    ) -> None:
+        """Override kalau game mendukung aktivasi lewat payload `/start`
+        (mis. masuk ke konteks input privat tanpa harus jadi peserta grup
+        secara langsung). Dipanggil oleh dispatcher generik
+        (`app/modules/games/deep_link.py`) kalau `metadata.deep_link_prefix`
+        cocok dengan payload. Default no-op -- mayoritas game tidak butuh
+        ini sama sekali."""
+        return

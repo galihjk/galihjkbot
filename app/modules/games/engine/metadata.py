@@ -15,3 +15,4 @@ class GameMetadata:
     supports_restore: bool = False
     enabled: bool = True
     how_to_play: str = ""
+    deep_link_prefix: str | None = None

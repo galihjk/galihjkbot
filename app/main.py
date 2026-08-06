@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from app.bootstrap import build_dispatcher, create_game_registry
+from app.bootstrap import build_dispatcher, create_autoreply_runtime, create_game_registry
 from app.bot.factory import create_bot
 from app.core.config import BASE_DIR, get_settings
 from app.core.logging import setup_logging
@@ -25,8 +25,16 @@ async def main() -> None:
     bot = create_bot(settings)
     game_registry = create_game_registry(settings)
     game_manager = GameManager(game_registry, session_factory, bot)
+    autoreply_service, autoreply_sync_service = create_autoreply_runtime(settings, bot)
 
-    dispatcher = build_dispatcher(session_factory, settings, game_registry, game_manager)
+    dispatcher = build_dispatcher(
+        session_factory,
+        settings,
+        game_registry,
+        game_manager,
+        autoreply_service,
+        autoreply_sync_service,
+    )
     dispatcher["settings"] = settings
     dispatcher["started_at"] = utcnow()
 
@@ -46,15 +54,53 @@ async def main() -> None:
                 drop_pending_updates=settings.telegram_drop_pending_updates
             )
             await game_manager.recover_sessions()
-            await _notify_superadmins_startup(bot, settings)
+            autoreply_status = await _startup_autoreply(
+                session_factory, autoreply_sync_service, settings
+            )
+            await _notify_superadmins_startup(bot, settings, autoreply_status)
             await dispatcher.start_polling(bot)
     finally:
         leaderboard_task.cancel()
         await engine.dispose()
 
 
-async def _notify_superadmins_startup(bot, settings) -> None:  # noqa: ANN001
-    text = f"🟢 {settings.app_name} v{settings.app_version} ({settings.app_env}) aktif."
+async def _startup_autoreply(
+    session_factory, autoreply_sync_service, settings
+) -> str:  # noqa: ANN001
+    """§16.3: muat snapshot aktif dari SQLite (tanpa network), lalu (opsional)
+    coba sync sekali. Kegagalan sync TIDAK PERNAH mencegah bot polling --
+    snapshot cache lama (kalau ada) tetap dipakai (last-known-good)."""
+    async with session_factory() as db_session:
+        info = await autoreply_sync_service.load_active_snapshot(db_session)
+
+    status = "READY_CACHED" if info is not None else "DEGRADED_EMPTY"
+
+    if settings.autoreply_startup_sync and settings.autoreply_source_url:
+        async with session_factory() as db_session:
+            try:
+                result = await autoreply_sync_service.sync(
+                    db_session, triggered_by_user_id=None, reason="startup"
+                )
+            except Exception:
+                logger.exception("Startup sync autoreply gagal tak terduga.")
+                status = "DEGRADED_CACHED" if info is not None else "DEGRADED_EMPTY"
+            else:
+                if result.status in ("success", "unchanged"):
+                    status = "READY_CACHED"
+                else:
+                    status = "DEGRADED_CACHED" if info is not None else "DEGRADED_EMPTY"
+
+    logger.info("Autoreply startup selesai. status=%s", status)
+    return status
+
+
+async def _notify_superadmins_startup(
+    bot, settings, autoreply_status: str = "UNKNOWN"
+) -> None:  # noqa: ANN001
+    text = (
+        f"🟢 {settings.app_name} v{settings.app_version} ({settings.app_env}) aktif.\n"
+        f"Autoreply: {autoreply_status}"
+    )
     for superadmin_id in settings.telegram_superadmin_ids:
         try:
             await bot.send_message(superadmin_id, text)

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from aiogram import Dispatcher
+from aiogram import Bot, Dispatcher
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from app.bot.error_handler import handle_global_error
@@ -12,6 +12,15 @@ from app.middlewares.group_tracking import GroupTrackingMiddleware
 from app.middlewares.persona import PersonaMiddleware
 from app.middlewares.user_tracking import UserTrackingMiddleware
 from app.modules.admin.router import get_router as get_admin_router
+from app.modules.autoreply.admin_router import get_router as get_autoreply_admin_router
+from app.modules.autoreply.cache import AutoreplyRuleCache
+from app.modules.autoreply.matcher import MsgCmdRuleMatcher
+from app.modules.autoreply.response_sender import AutoreplyResponseSender
+from app.modules.autoreply.router import get_router as get_autoreply_router
+from app.modules.autoreply.service import AutoreplyService
+from app.modules.autoreply.sources.google_sheet import GoogleSheetRuleSource
+from app.modules.autoreply.sync_service import AutoreplySyncService
+from app.modules.autoreply.template_renderer import MsgCmdTemplateRenderer
 from app.modules.common.router import get_router as get_common_router
 from app.modules.devtools.router import get_router as get_devtools_router
 from app.modules.leaderboard.router import get_router as get_leaderboard_router
@@ -34,6 +43,34 @@ def create_game_registry(settings: Settings) -> GameRegistry:
         registry.register(KuisKenalGame())
     registry.register(KursiKosongGame())
     return registry
+
+
+def create_autoreply_runtime(
+    settings: Settings, bot: Bot
+) -> tuple[AutoreplyService, AutoreplySyncService]:
+    cache = AutoreplyRuleCache()
+    source = GoogleSheetRuleSource(
+        settings.autoreply_source_url,
+        connect_timeout_seconds=settings.autoreply_http_connect_timeout_seconds,
+        read_timeout_seconds=settings.autoreply_http_read_timeout_seconds,
+        max_bytes=settings.autoreply_max_source_bytes,
+    )
+    sync_service = AutoreplySyncService(
+        source,
+        cache,
+        source_url=settings.autoreply_source_url,
+        keep_snapshots=settings.autoreply_keep_snapshots,
+    )
+    sender = AutoreplyResponseSender(bot, MsgCmdTemplateRenderer())
+    service = AutoreplyService(
+        cache,
+        MsgCmdRuleMatcher(),
+        sender,
+        allow_private=settings.autoreply_allow_private,
+        ignore_bots=settings.autoreply_ignore_bots,
+        max_responses_per_message=settings.autoreply_max_responses_per_message,
+    )
+    return service, sync_service
 
 
 def register_middlewares(
@@ -65,6 +102,10 @@ def register_modules(dispatcher: Dispatcher) -> None:
     dispatcher.include_router(get_games_router())
     dispatcher.include_router(get_devtools_router())
     dispatcher.include_router(get_leaderboard_router())
+    dispatcher.include_router(get_autoreply_admin_router())
+    # Fallback terakhir -- lihat §19 desain: tidak boleh mengambil update
+    # yang seharusnya diproses command/game router di atas.
+    dispatcher.include_router(get_autoreply_router())
 
 
 def build_dispatcher(
@@ -72,6 +113,8 @@ def build_dispatcher(
     settings: Settings,
     game_registry: GameRegistry,
     game_manager: GameManager,
+    autoreply_service: AutoreplyService,
+    autoreply_sync_service: AutoreplySyncService,
 ) -> Dispatcher:
     dispatcher = create_dispatcher()
     dispatcher.errors.register(handle_global_error)
@@ -80,4 +123,6 @@ def build_dispatcher(
     dispatcher["game_registry"] = game_registry
     dispatcher["game_manager"] = game_manager
     dispatcher["persona_middleware"] = persona_middleware
+    dispatcher["autoreply_service"] = autoreply_service
+    dispatcher["autoreply_sync_service"] = autoreply_sync_service
     return dispatcher

@@ -8,12 +8,14 @@ Bot Telegram jalan, bisa di-`python -m app.main` dari Windows dev. Fondasi (Fase
 
 **Baru (2026-08-06): game kedua, Kuis Kenal, Tahap 0-10 selesai dari sisi kode + test otomatis** (`app/modules/games/implementations/kuis_kenal/`) — lihat detail di tabel di bawah. **Belum**: Tahap 11 (test manual di Telegram sungguhan) dan Tahap 12 (kalibrasi produksi) — makanya masih didaftarkan hanya di non-production (`app/bootstrap.py`). Sesi ini juga menambahkan **infrastruktur pytest formal** ke repo (`tests/`, `pytest.ini`, `requirements-dev.txt`) — sebelumnya semua verifikasi Kursi Kosong dilakukan lewat script ad-hoc di scratchpad (tidak committed); Kuis Kenal adalah game pertama yang test otomatisnya benar-benar ada di repo.
 
+**Baru (2026-08-06, sesi terpisah): modul Autoreply/MsgCmd SELESAI dari sisi kode + test otomatis** (`app/modules/autoreply/`), sesuai `docs/Desain_Pengembangan_Autoreply_MsgCmd.md` (semua 7 Tahap rencana implementasi di dokumen itu dikerjakan). Sekaligus membangun infra generik baru yang sebelumnya belum ada: **feature registry** (`features`/`group_features` + `feature_service.is_enabled()`) dan **audit log** (`audit_logs`). Lihat detail di tabel "SUDAH jalan" baris Autoreply. **Belum pernah dites di Telegram sungguhan** — baru integration test `FakeBot` (`tests/modules/autoreply/` + `tests/database/`, 99 test). `enabled_globally=False` default dari migration, jadi tidak aktif sampai admin jalankan `/msgcmd_reload` lalu `/msgcmd_enable`.
+
 ## Yang SUDAH jalan
 
 | Area | Status | Keterangan |
 |---|---|---|
 | Fondasi (config, logging, bootstrap, `/start`) | ✅ | |
-| Database (SQLAlchemy async + Alembic + WAL pragma) | ✅ | 5 migration sudah jalan: users/groups/group_members, administrators, game_sessions/game_players/game_events, eliminated_round+user_game_scores, monthly_maintenance_runs |
+| Database (SQLAlchemy async + Alembic + WAL pragma) | ✅ | 7 migration sudah jalan: users/groups/group_members, administrators, game_sessions/game_players/game_events, eliminated_round+user_game_scores, monthly_maintenance_runs, features/group_features/settings/audit_logs, autoreply_rule_sets/autoreply_rules/autoreply_sync_runs |
 | User & group tracking (middleware) | ✅ | |
 | Admin: `/health`, `/users`, `/user`, `/groups`, `/group` | ✅ | Pagination via argumen command, bukan tombol |
 | Admin: `/admin` dashboard dengan tombol inline | ✅ | Pengguna tercatat, aktif 24 jam, total grup, uptime |
@@ -47,6 +49,9 @@ Bot Telegram jalan, bisa di-`python -m app.main` dari Windows dev. Fondasi (Fase
 | Recovery setelah restart | ✅ (versi tahap awal) | LOBBY/STARTING dipulihkan penuh; RUNNING di-ABORT (bukan resume mid-round — sesuai kebijakan blueprint utk versi awal) |
 | Git repository | ✅ | Remote `origin` → `github.com/galihjk/galihjkbot.git`, branch `main`. Riwayat SEBELUM titik ini tidak ada di git, cuma di `development-history.md` |
 | Pesan ramah (minta maaf, mention, ajakan main lagi) | ✅ | Di semua jalur cancel/finish game |
+| **Feature registry generik** (`features`/`group_features`) | ✅ | `app/services/feature_service.py::is_enabled()` — override per grup menang atas global, fail-closed (`False`) kalau feature belum pernah didaftarkan. Infra generik dibangun BUAT autoreply tapi reusable modul lain nanti |
+| **Audit log generik** (`audit_logs`) | ✅ | `app/database/repositories/audit_repository.py::record()` — dipanggil dari aksi admin autoreply (enable/disable global, toggle grup, aktivasi snapshot). Belum ada command `/audit`/`/errors` buat baca baliknya — baru bisa diquery manual dari DB |
+| **Autoreply / MsgCmd** (`app/modules/autoreply/`) | ✅ (kode + test, belum dites di Telegram) | Implementasi lengkap `docs/Desain_Pengembangan_Autoreply_MsgCmd.md` (7 Tahap rencana implementasi dokumen itu). Rule dari Google Sheet CSV terpublikasi → snapshot SQLite tervalidasi (`sync_service.py`, strict: 1 baris error = seluruh snapshot ditolak, last-known-good kalau sync gagal) → cache immutable di memori (`cache.py`) → matcher exact/contains (`matcher.py`) → grammar template lengkap §10 dokumen: placeholder subject/object/command/reply, mention `@sbj(...)@`/`@obj(...)@`, 7 pasang kondisi, tombol URL (`template_renderer.py`) → kirim teks/6 tipe media via `AutoreplyResponseSender`. Command admin lengkap (`/msgcmd`, `/msgcmd_status`, `/msgcmd_reload`, `/msgcmd_enable`/`_disable`, `/msgcmd_group`, `/format_msgcmd`, `/to_msgcmd`, `/msgcmd_sync_errors`) di `admin_handlers.py`, permission dipetakan ke `AdminRole` yang SUDAH ADA (viewer/operator/admin) — BUKAN dotted-permission string terpisah seperti tersirat di dokumen (deviasi sadar, dicatat di kode). Router fallback didaftarkan PALING TERAKHIR di `bootstrap.py` supaya tidak mengambil update yang harusnya diproses command/game. Dependency baru: `httpx`. **Deviasi lain dari dokumen**: periodic background sync (`AUTOREPLY_SYNC_INTERVAL_SECONDS`) belum diimplementasikan sebagai loop (config field ada, defaultnya 0/nonaktif, dokumen sendiri tidak menaruhnya di salah satu dari 7 Tahap); tabel `settings` generik dibangun tapi TIDAK dipakai autoreply (redundan dengan `autoreply_rule_sets.status`/`autoreply_sync_runs` yang sudah otoritatif) — tersedia untuk modul lain. 99 test (`tests/modules/autoreply/` + `tests/database/`), semua lewat `FakeBot` buatan sendiri + SQLite file asli, TIDAK ADA yang menyentuh Google Sheet/Telegram sungguhan |
 
 ## Yang BELUM dikerjakan (urut kira-kira sesuai kebutuhan)
 
@@ -55,10 +60,10 @@ Bot Telegram jalan, bisa di-`python -m app.main` dari Windows dev. Fondasi (Fase
 | **Kuis Kenal Tahap 11-12** (test manual Telegram + kalibrasi produksi) | ❌ | Kode + test otomatis sudah TUNTAS (lihat tabel "SUDAH jalan"), tapi belum pernah dicoba di Telegram sungguhan (solo lewat `/p1`-`/p7`, minimal 3 & 8 pemain seperti Kursi Kosong). Bank pertanyaan baru 60 (target production 200) — cukup untuk testing, belum untuk production. Setelah test manual OK: hapus guard `app_env != "production"` di `bootstrap.py`, lalu kalibrasi poin/menit dari sesi nyata (§18.4 plan) |
 | **Eksekusi nyata deployment Termux di device** | ❌ | Panduan + script sudah lengkap (lihat tabel "SUDAH jalan") — TAPI belum pernah benar-benar dijalankan di Android TV Box sungguhan. Langkah manual user selanjutnya, laporkan balik kalau ada langkah yang meleset |
 | Admin: `/gamesessions`, `/admincancelgame` | ❌ | Blueprint §21.6-21.7 — `/activegames`/`/gameinfo` sudah ada (lihat tabel "SUDAH jalan"); dua command ini SENGAJA belum dikerjakan (di luar cakupan Tahap 5, tidak diminta) — `/admincancelgame` fungsinya kira-kira sudah tertutupi `/cancelgame` per-grup (creator/admin, sudah terima status RUNNING) |
-| Admin: `/errors` command, tabel `system_metrics`/`audit_logs` | ❌ | Blueprint §21.9, §16.9-16.10 — error sekarang cuma ke `logs/error.log` + Telegram, belum ada agregasi historis |
-| Feature registry (§6 blueprint) | ❌ | On/off fitur per grup dari database — belum relevan selama cuma modul `games` yang aktif |
+| Admin: `/errors` command, tabel `system_metrics` | ❌ | Blueprint §21.9, §16.9-16.10 — error sekarang cuma ke `logs/error.log` + Telegram. `audit_logs` SUDAH ADA (lihat tabel "SUDAH jalan", dipakai autoreply) tapi belum ada command buat baca baliknya, dan `system_metrics` (metrics agregat) masih belum ada sama sekali |
 | Statistik per-game (`games_played`, `games_won` dkk, `/profil`) | ❌ | Beda dari leaderboard skor (yang sudah ada) — ini soal riwayat "berapa kali main/menang" per game, belum ada tabel/UI-nya. Sengaja ditunda, belum ada konsumennya |
-| Fase 6 (autoreply, helpdesk, game kedua, dst) | ❌ | Belum mulai, nunggu Kursi Kosong selesai dulu secara wajar |
+| Autoreply: test manual Telegram sungguhan, periodic sync, admin panel "Detail" | ❌ | Kode+test otomatis SELESAI (lihat tabel "SUDAH jalan") tapi belum pernah dicoba di grup sungguhan — perlu Google Sheet nyata + `/msgcmd_reload` + trigger manual. Periodic sync (`AUTOREPLY_SYNC_INTERVAL_SECONDS`) baru config field, belum ada loop-nya |
+| Fase 6 sisanya (helpdesk, broadcast, dst) | ❌ | Autoreply (bagian Fase 6) SUDAH selesai dari sisi kode — sisanya (helpdesk dkk) belum mulai |
 
 ## Langkah selanjutnya yang paling jelas
 
@@ -66,7 +71,7 @@ Bot Telegram jalan, bisa di-`python -m app.main` dari Windows dev. Fondasi (Fase
 
 **Kursi Kosong (Tahap 0-5)** tetap TUNTAS, tidak ada tindak lanjut. Sistem skor/leaderboard bulanan dan panduan Termux juga sudah selesai dari sisi kode/dokumen — sisanya murni bukan-coding: **jalankan panduan Termux di device sungguhan** (`docs/termux-deployment-guide.md`), laporkan balik kalau ada langkah yang error.
 
-Alternatif kalau mau ganti arah dulu (semua independen, tanya preferensi user): `/gamesessions`/`/admincancelgame` (sisa item admin monitoring), statistik per-game (`/profil`), atau bank pertanyaan Kuis Kenal 60→200 untuk production.
+Alternatif kalau mau ganti arah dulu (semua independen, tanya preferensi user): test manual Autoreply/MsgCmd di Telegram sungguhan (perlu Google Sheet nyata + `/msgcmd_reload` + `/msgcmd_enable` + trigger di grup testing), `/gamesessions`/`/admincancelgame` (sisa item admin monitoring), statistik per-game (`/profil`), atau bank pertanyaan Kuis Kenal 60→200 untuk production.
 
 ## Peta file cepat (kalau perlu ubah sesuatu)
 

@@ -45,6 +45,16 @@ class Settings:
     telegram_leaderboard_channel_link: str | None
     database_url: URL
     log_level: str
+    autoreply_source_url: str
+    autoreply_startup_sync: bool
+    autoreply_sync_interval_seconds: int
+    autoreply_http_connect_timeout_seconds: float
+    autoreply_http_read_timeout_seconds: float
+    autoreply_max_source_bytes: int
+    autoreply_max_responses_per_message: int
+    autoreply_keep_snapshots: int
+    autoreply_allow_private: bool
+    autoreply_ignore_bots: bool
 
     @classmethod
     def load(cls) -> "Settings":
@@ -74,6 +84,34 @@ class Settings:
             telegram_leaderboard_channel_link=channel_link_raw or None,
             database_url=_resolve_database_url(),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
+            autoreply_source_url=os.getenv("AUTOREPLY_SOURCE_URL", "").strip(),
+            autoreply_startup_sync=_parse_bool(
+                os.getenv("AUTOREPLY_STARTUP_SYNC", "true")
+            ),
+            autoreply_sync_interval_seconds=int(
+                os.getenv("AUTOREPLY_SYNC_INTERVAL_SECONDS", "0")
+            ),
+            autoreply_http_connect_timeout_seconds=float(
+                os.getenv("AUTOREPLY_HTTP_CONNECT_TIMEOUT_SECONDS", "5")
+            ),
+            autoreply_http_read_timeout_seconds=float(
+                os.getenv("AUTOREPLY_HTTP_READ_TIMEOUT_SECONDS", "15")
+            ),
+            autoreply_max_source_bytes=int(
+                os.getenv("AUTOREPLY_MAX_SOURCE_BYTES", "5242880")
+            ),
+            autoreply_max_responses_per_message=int(
+                os.getenv("AUTOREPLY_MAX_RESPONSES_PER_MESSAGE", "20")
+            ),
+            autoreply_keep_snapshots=int(
+                os.getenv("AUTOREPLY_KEEP_SNAPSHOTS", "3")
+            ),
+            autoreply_allow_private=_parse_bool(
+                os.getenv("AUTOREPLY_ALLOW_PRIVATE", "false")
+            ),
+            autoreply_ignore_bots=_parse_bool(
+                os.getenv("AUTOREPLY_IGNORE_BOTS", "true")
+            ),
         )
 
 

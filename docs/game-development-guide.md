@@ -24,9 +24,9 @@ app/modules/games/
 ├── keyboards/lobby.py           LobbyCallback + keyboard lobby & ready-check (generik)
 ├── keyboards/game_menu.py       Keyboard pemilihan game (generik)
 ├── presenters.py                Format /gamestatus (generik)
-├── router.py + handlers/        Command & callback generik (/game, /games, /gamestatus,
-│                                 /cancelgame, lobby_callbacks, game_callbacks) — TIDAK
-│                                 perlu disentuh untuk menambah game baru
+├── router.py + handlers/        Command & callback generik (/game, /games, /howtoplay,
+│                                 /gamestatus, /cancelgame, lobby_callbacks, game_callbacks)
+│                                 — TIDAK perlu disentuh untuk menambah game baru
 │
 └── implementations/
     └── <key_game>/              <- DI SINI kamu kerja kalau nambah game baru
@@ -446,7 +446,7 @@ Kalau butuh event type baru untuk audit log, tambahkan ke `GameEventType` di `ap
 ## 12. Checklist menambah game baru
 
 1. Buat folder `app/modules/games/implementations/<key_game>/`
-2. `metadata.py` — definisikan `GameMetadata(key=..., name=..., description=..., min_players=..., max_players=..., lobby_timeout_seconds=60, ready_check_seconds=60)`
+2. `metadata.py` — definisikan `GameMetadata(key=..., name=..., description=..., min_players=..., max_players=..., lobby_timeout_seconds=60, ready_check_seconds=60, how_to_play=...)`. `how_to_play` adalah teks cara main yang ditampilkan di `/howtoplay` (boleh multi-baris/poin-poin, lihat `implementations/kursi_kosong/metadata.py` sebagai contoh) — beda dari `description` yang cuma ringkasan 1-2 kalimat.
 3. `state.py` — fungsi murni untuk bentuk `state_json` kamu (opsional tapi disarankan, gampang ditest)
 4. `keyboards.py` — builder `InlineKeyboardMarkup` pakai `GameCallback(session_id=..., data=...)`
 5. `texts.py` — template teks (ikuti konvensi §9)
@@ -460,7 +460,7 @@ Kalau butuh event type baru untuk audit log, tambahkan ke `GameEventType` di `ap
 
 ## 13. Penyesuaian dari blueprint arsitektur awal
 
-Kontrak `BaseGame`, `GameRegistry`, `GameManager`, lock, timer, event log (`game_events`), command generik (`/game /games /gamestatus /cancelgame`), recovery restart, dan global error handler semuanya konsisten dengan blueprint arsitektur awal proyek ini — tidak ada penyesuaian berarti yang perlu diketahui untuk menambah game baru. Yang berbeda dan PENTING diketahui:
+Kontrak `BaseGame`, `GameRegistry`, `GameManager`, lock, timer, event log (`game_events`), command generik (`/game /games /howtoplay /gamestatus /cancelgame`), recovery restart, dan global error handler semuanya konsisten dengan blueprint arsitektur awal proyek ini — tidak ada penyesuaian berarti yang perlu diketahui untuk menambah game baru. Yang berbeda dan PENTING diketahui:
 
 | Area | Penyesuaian |
 |---|---|

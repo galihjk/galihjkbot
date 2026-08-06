@@ -9,6 +9,7 @@ def get_router() -> Router:
     from app.modules.games.handlers import (  # noqa: F401
         commands,
         game_callbacks,
+        howtoplay,
         lobby_callbacks,
     )
 

@@ -14,3 +14,4 @@ class GameMetadata:
     ready_check_seconds: int
     supports_restore: bool = False
     enabled: bool = True
+    how_to_play: str = ""

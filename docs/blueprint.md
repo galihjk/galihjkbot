@@ -749,7 +749,9 @@ Gunakan numeric Telegram user ID: `TELEGRAM_SUPERADMIN_IDS=123456789,987654321`.
 
 **Private chat**: `/start`, `/help`, `/about`, `/privacy`
 
-**Grup**: `/games`, `/game`, `/gamestatus`, `/cancelgame`, `/help`
+**Grup**: `/games`, `/game`, `/howtoplay`, `/gamestatus`, `/cancelgame`, `/help`
+
+`/howtoplay` menampilkan daftar game dengan tombol inline; klik tombol menampilkan teks cara main game tersebut (edit pesan in-place, dengan tombol "⬅️ Kembali" ke daftar).
 
 `/game` tanpa parameter menampilkan inline menu:
 

@@ -21,4 +21,14 @@ KURSI_KOSONG_METADATA = GameMetadata(
     max_players=8,
     lobby_timeout_seconds=60,
     ready_check_seconds=60,
+    how_to_play=(
+        "🪑 CARA MAIN — Kursi Kosong\n\n"
+        "Tiap ronde, jumlah kursi selalu 1 lebih sedikit dari jumlah pemain aktif. "
+        "Klik tombol kursi buat menempatinya sebelum waktu ronde (15 detik) habis.\n\n"
+        "• Kalau 2 pemain klik kursi yang sama duluan → terjadi rebutan, cuma 1 yang menang.\n"
+        "• Pemain yang sudah duduk tidak bisa pindah kursi lagi.\n"
+        "• Yang tidak kebagian kursi saat ronde habis → tereliminasi.\n"
+        "• Bertahan terus sampai jadi 1 pemain terakhir = MENANG.\n\n"
+        "Minimal 3, maksimal 8 pemain per game."
+    ),
 )

@@ -16,4 +16,7 @@ SIMPLE_GAME_METADATA = GameMetadata(
     max_players=8,
     lobby_timeout_seconds=60,
     ready_check_seconds=60,
+    how_to_play=(
+        "Game percobaan untuk uji fondasi engine, tidak punya aturan main yang baku."
+    ),
 )

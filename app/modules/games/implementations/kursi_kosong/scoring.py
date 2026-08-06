@@ -6,9 +6,8 @@ from app.core.enums import GamePlayerStatus
 from app.modules.games.engine.score import ScoreBreakdown
 
 PARTICIPATION_SCORE = 10
-SURVIVAL_SCORE_PER_ROUND = 5
-RESULT_SCORE_TIERS = [60, 40, 25]  # index 0 = Juara 1, dst (§27 desain)
-RESULT_SCORE_DEFAULT = 10
+SURVIVAL_SCORE_PER_ROUND = 10  # dinaikkan dari 5 -- lihat development-history.md
+                                 # (revisi fairness poin/menit lintas-game)
 AFK_PENALTY_BASE = 10
 AFK_PENALTY_RATIO = 0.5
 
@@ -50,46 +49,31 @@ class PlayerScoreResult:
 
 
 def compute_scores(outcomes: list[PlayerOutcome]) -> dict[int, PlayerScoreResult]:
-    """Hitung skor akhir tiap pemain sesuai §26-31 & §19 (revisi penalti AFK
+    """Hitung skor akhir tiap pemain sesuai §28-31 & §19 (revisi penalti AFK
     parsial) desain. Murni -- tidak sentuh DB/Telegram, gampang ditest.
 
-    Ranking skor_hasil (§27) dihitung dari RONDE eliminasi (bukan jumlah
-    pemain) supaya kompatibel dengan revisi aturan eliminasi (>1 pemain bisa
-    tereliminasi bersamaan di ronde yang sama) -- yang seri di ronde yang
-    sama dapat TIER YANG SAMA, tidak dipisah/dirata-rata (dikonfirmasi user).
+    Skor hasil (ranking juara) SENGAJA DIHAPUS (revisi fairness poin/menit
+    lintas-game, lihat development-history.md) -- "menang" sekarang murni
+    soal skor_ketahanan (1 ronde lebih lama dari runner-up), bukan lompatan
+    tier terpisah. `result_score` tetap ada di `ScoreBreakdown` (kontrak
+    generik engine) tapi selalu 0 untuk game ini.
     """
     winners = [o for o in outcomes if o.status == GamePlayerStatus.WINNER.value]
     eliminated_normal = [o for o in outcomes if o.status == GamePlayerStatus.ELIMINATED.value]
     afk = [o for o in outcomes if o.status == GamePlayerStatus.AFK.value]
-
-    result_score_by_uid: dict[int, int] = {}
-    for o in winners:
-        result_score_by_uid[o.user_id] = RESULT_SCORE_TIERS[0]
-
-    rounds_desc = sorted({o.eliminated_round for o in eliminated_normal}, reverse=True)
-    for tier_index, round_number in enumerate(rounds_desc, start=1):
-        tier_score = (
-            RESULT_SCORE_TIERS[tier_index]
-            if tier_index < len(RESULT_SCORE_TIERS)
-            else RESULT_SCORE_DEFAULT
-        )
-        for o in eliminated_normal:
-            if o.eliminated_round == round_number:
-                result_score_by_uid[o.user_id] = tier_score
 
     results: dict[int, PlayerScoreResult] = {}
 
     for o in winners + eliminated_normal:
         factor = player_count_factor(o.initial_player_count)
         rounds_passed = o.final_round if o.status == GamePlayerStatus.WINNER.value else o.eliminated_round - 1
-        result_score = result_score_by_uid[o.user_id]
         participation_score = PARTICIPATION_SCORE
         survival_score = SURVIVAL_SCORE_PER_ROUND * rounds_passed
-        session_score = result_score + participation_score + survival_score
+        session_score = participation_score + survival_score
         final_score = round(session_score * factor)
         results[o.user_id] = PlayerScoreResult(
             breakdown=ScoreBreakdown(
-                result_score=result_score,
+                result_score=0,
                 participation_score=participation_score,
                 survival_score=survival_score,
                 final_score=final_score,
@@ -104,7 +88,10 @@ def compute_scores(outcomes: list[PlayerOutcome]) -> dict[int, PlayerScoreResult
         survival_score = SURVIVAL_SCORE_PER_ROUND * rounds_passed
         penalty = round(AFK_PENALTY_BASE + AFK_PENALTY_RATIO * survival_score)
         # Bentuk sederhana (§19): skor_sesi_afk = 0,5 x skor_ketahanan_afk --
-        # setara (participation_placeholder=10 + 0 + survival) - penalty.
+        # setara (partisipasi=10 + survival) - penalty. Ini TIDAK berubah oleh
+        # penghapusan skor_hasil di atas -- AFK_PENALTY_BASE=10 memang persis
+        # mencoret skor_partisipasi (10) yang pemain normal dapat, jadi
+        # hasilnya selalu 0,5x ketahanan apa pun formula pemain normal.
         session_score = AFK_PENALTY_RATIO * survival_score
         final_score = round(session_score * factor)
         results[o.user_id] = PlayerScoreResult(

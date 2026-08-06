@@ -503,7 +503,7 @@ async def calculate_scores(
     }
 ```
 
-Default (kalau tidak di-override) mengembalikan `{}` — game tanpa sistem skor tidak perlu peduli sama sekali dengan bagian ini. **Formula skornya 100% terserah game kamu** (hasil + partisipasi + ketahanan, dikali faktor apa pun yang relevan buat game kamu, atau sesederhana "menang = 10, kalah = 0") — engine cuma butuh angka akhirnya per `user_id`, tidak peduli bagaimana kamu menghitungnya.
+Default (kalau tidak di-override) mengembalikan `{}` — game tanpa sistem skor tidak perlu peduli sama sekali dengan bagian ini. **Bentuk formula skornya terserah game kamu** (hasil + partisipasi + ketahanan, dikali faktor apa pun yang relevan buat game kamu, atau sesederhana "menang = 10, kalah = 0") — engine cuma butuh angka akhirnya per `user_id`, tidak peduli bagaimana kamu menghitungnya. **Tapi SKALA-nya bukan bebas sepenuhnya** — lihat subbagian fairness di bawah sebelum menentukan angka-angka konkretnya, supaya game kamu tidak mendominasi (atau kalah jauh) di leaderboard global cuma karena skalanya beda dari game lain.
 
 ### Apa yang terjadi otomatis sesudahnya
 
@@ -514,6 +514,21 @@ Default (kalau tidak di-override) mengembalikan `{}` — game tanpa sistem skor 
 - Tiap tanggal 1, job otomatis mengumumkan leaderboard bulan yang baru berakhir ke channel pengumuman + tiap grup, lalu **menghapus fisik** baris skor periode itu (tidak ada riwayat all-time — ini keputusan produk yang sengaja, bukan bug kalau kamu lihat skor lama sudah tidak ada lagi setelah tanggal 1).
 
 Kalau game kamu tidak punya konsep skor sama sekali (misal murni kooperatif tanpa menang/kalah), biarkan `calculate_scores()` di nilai default (`{}`) — tidak ada baris yang ter-commit, tidak muncul di leaderboard, tidak ada efek samping apa pun.
+
+### Kalibrasi skala biar adil lintas game
+
+`/leaderboard` (global) menjumlahkan `final_score` mentah dari SEMUA game yang ada. Kalau skala poin tiap game beda jauh, game dengan skala lebih besar otomatis mendominasi leaderboard — bukan karena pemainnya lebih hebat, cuma karena angkanya lebih besar. Dua hal yang perlu diperhatikan saat merancang formula skor game baru:
+
+1. **Sisakan skor minimal buat yang cepat tersingkir.** Jangan biarkan pemain yang kalah/tereliminasi di awal permainan dapat nol mutlak — mereka sudah menginvestasikan waktu sejak join lobi. Sisipkan komponen FLAT kecil (skor partisipasi) yang didapat siapa pun yang sempat beraksi valid, terlepas dari hasil akhirnya.
+2. **Samakan LAJU perolehan poin (poin per menit), bukan cuma total per sesi.** Komponen yang skala terhadap seberapa lama/jauh pemain bertahan (ronde, giliran, dst) itu yang menentukan laju ini — kalibrasi konstantanya pakai DURASI NYATA, bukan tebakan. `GameSession.started_at`/`finished_at` (kolom generik, otomatis terisi tiap sesi, gratis dipakai) memberi durasi sungguhan tiap sesi — hitung `skor_sesi ÷ menit` dari beberapa sesi nyata (variasi ukuran lobi/skenario), lalu sesuaikan konstantanya sampai laju itu sepadan dengan game lain di bot ini.
+
+**Angka acuan/baseline** (titik awal yang direkomendasikan, bukan aturan mati — sesuaikan lagi kalau game kamu punya karakteristik jauh berbeda):
+
+- Skor partisipasi: **10 poin** untuk aksi valid, **0** kalau tidak beraksi sama sekali.
+- Target laju: **±36 poin per menit** durasi sesi nyata, dirata-rata lintas ukuran lobi/skenario — bukan target presisi per sesi individual (variasi kecepatan pemain, manusia bukan robot, bikin tiap sesi individual tidak akan pernah persis sama).
+- Pemain yang tidak aktif (AFK/setara): dapat sekitar **separuh** dari laju itu — tetap kehilangan skor partisipasi sepenuhnya, tapi komponen yang sudah terkumpul sebelum jadi tidak-aktif tetap dihargai separuhnya, bukan dihanguskan total.
+
+Bentuk generiknya: `skor_sesi = skor_partisipasi_minimal + skor_progresif(waktu/giliran yang dilewati)`, lalu kalikan faktor lain yang relevan (mis. ukuran lobi) kalau game kamu butuh itu.
 
 ---
 

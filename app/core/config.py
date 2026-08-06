@@ -41,6 +41,8 @@ class Settings:
     telegram_bot_token: str
     telegram_superadmin_ids: list[int]
     telegram_drop_pending_updates: bool
+    telegram_leaderboard_channel_id: int | None
+    telegram_leaderboard_channel_link: str | None
     database_url: URL
     log_level: str
 
@@ -52,6 +54,8 @@ class Settings:
                 "TELEGRAM_BOT_TOKEN belum diset. Salin .env.example menjadi "
                 ".env lalu isi token bot."
             )
+        channel_id_raw = os.getenv("TELEGRAM_LEADERBOARD_CHANNEL_ID", "").strip()
+        channel_link_raw = os.getenv("TELEGRAM_LEADERBOARD_CHANNEL_LINK", "").strip()
         return cls(
             app_name=os.getenv("APP_NAME", "TelegramMultiBot"),
             app_env=os.getenv("APP_ENV", "development"),
@@ -64,6 +68,10 @@ class Settings:
             telegram_drop_pending_updates=_parse_bool(
                 os.getenv("TELEGRAM_DROP_PENDING_UPDATES", "false")
             ),
+            telegram_leaderboard_channel_id=(
+                int(channel_id_raw) if channel_id_raw else None
+            ),
+            telegram_leaderboard_channel_link=channel_link_raw or None,
             database_url=_resolve_database_url(),
             log_level=os.getenv("LOG_LEVEL", "INFO"),
         )

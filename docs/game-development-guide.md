@@ -419,18 +419,15 @@ Kalau butuh event type baru untuk audit log, tambahkan ke `GameEventType` di `ap
 
 ---
 
-## 15. Sistem skor & statistik lintas-game — BELUM DIBANGUN
+## 15. Sistem skor & statistik lintas-game — SELESAI (skor global+leaderboard bulanan), statistik per-game BELUM
 
-Ketahuan saat mempelajari desain Kursi Kosong (§26-33 di `game-design-kursi-kosong.md`): game itu butuh **skor global yang dibagi bersama game lain** ("skor Kursi Kosong masuk ke skor global bot yang dipakai bersama permainan lainnya") plus statistik per-game yang tersimpan terpisah (`games_played`, `games_won`, dst). **Kita belum punya salah satu dari ini sama sekali** — tidak ada tabel skor/leaderboard, tidak ada kolom skor yang benar-benar dipakai (`game_players.score` sengaja tidak dibuat, lihat tabel §13).
+**Skor & leaderboard: sudah dibangun**, sebagai kapabilitas engine generik (bukan spesifik Kursi Kosong), sesuai rekomendasi yang tadinya ditulis di sini:
 
-Ini bukan cuma soal Kursi Kosong — kalau dibangun HANYA khusus untuk Kursi Kosong sekarang, game berikutnya yang juga butuh skor akan menabrak keputusan yang sama lagi. **Rekomendasi: bangun sebagai kapabilitas engine generik**, bukan spesifik satu game, supaya game manapun bisa pakai lewat pola yang sama. Kerangka kasarnya (detail ada di rencana implementasi):
+- Tabel `user_game_scores` (`user_id`, `game_key`, `session_id`, `result_score`, `participation_score`, `survival_score`, `final_score`, `committed_at`) — dibuat Tahap 4 Kursi Kosong, formula skornya SPESIFIK Kursi Kosong (`implementations/kursi_kosong/scoring.py`), engine cuma tahu "berapa skor akhir tiap user_id" lewat hook `BaseGame.calculate_scores()`.
+- **Modul baru `app/modules/leaderboard/`** (generik lintas-game, sesuai rencana di sini — "skor global yang dibagi bersama game lain"): command `/skor` (skor sendiri, global + per-grup), `/leaderboard` (leaderboard global bulan ini), `/leaderboardgrup` (leaderboard grup ini). Job bulanan otomatis (`scheduler.py`, loop `asyncio` polos 1x/hari, tanpa dependency scheduler baru) mengumumkan leaderboard ke channel (`TELEGRAM_LEADERBOARD_CHANNEL_ID`) + tiap grup, lalu **menghapus fisik** `user_game_scores` periode itu (TIDAK ADA riwayat all-time — keputusan sengaja) dan membersihkan `User`/`Group` tidak aktif >6 bulan. Detail lengkap & kronologi keputusan (termasuk kenapa destruktif) di `development-history.md`.
+- Idempotensi lewat marker table `monthly_maintenance_runs` (pola exists-check, sama seperti `commit_scores`), bukan kolom timestamp per-baris.
 
-- Tabel baru, misal `user_game_scores` (atau nama lain): `user_id`, `game_key`, `session_id`, `result_score`, `participation_score`, `survival_score`, `final_score`, `committed_at` — mirip pola `score_committed_at` di desain (mencegah skor diproses dua kali untuk session yang sama).
-- Formula skor (hasil + partisipasi + ketahanan, dikali faktor jumlah pemain) itu **spesifik Kursi Kosong**, jadi tetap tinggal di dalam `implementations/kursi_kosong/`, BUKAN di engine — engine cuma perlu tahu "berapa skor akhir tiap user_id" dan cara menyimpannya secara idempotent.
-- Kemungkinan perlu 1 hook baru di `BaseGame` (misal `calculate_scores(context, result) -> dict[user_id, int]`) yang dipanggil `GameManager.finish_game()` sebelum/sesudah `finish()` — supaya commit skor terjadi di SATU tempat generik (jadi aturan "skor cuma dicommit sekali", "game yang di-cancel tidak dapat skor" otomatis berlaku ke semua game, tidak perlu diulang tiap implementasi).
-- Statistik per-game (`games_played` dkk) bisa dihitung on-demand dari `game_players`+`game_sessions` yang sudah ada (tidak perlu tabel agregat baru di awal) — cukup tambah query di repository kalau/ketika ada UI yang menampilkannya (`/profil`, dsb — belum ada).
-
-**Status: didesain di rencana implementasi, belum ada satu baris kode pun** (menunggu Tahap 4). Formula skor AFK di desain sudah direvisi jadi penalti PARSIAL (bukan hangus total seperti draf awal) — lihat `game-design-kursi-kosong.md` §19 dan `development-history.md` untuk kronologi keputusannya. Jangan mulai coding skor sebelum baca revisi itu, supaya tidak salah implementasi formula lama yang sudah tidak berlaku.
+**Statistik per-game (`games_played`, `games_won`, `/profil`) MASIH belum dibangun** — beda konsep dari skor/leaderboard di atas (ini soal riwayat "berapa kali main/menang" per game, bukan poin). Bisa dihitung on-demand dari `game_players`+`game_sessions` yang sudah ada, tidak perlu tabel agregat baru — cukup tambah query di repository kalau/ketika ada UI yang menampilkannya. Belum ada konsumennya, sengaja ditunda.
 
 ---
 

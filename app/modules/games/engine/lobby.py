@@ -3,7 +3,7 @@ from __future__ import annotations
 from app.modules.games.engine.context import PlayerInfo
 from app.modules.games.engine.metadata import GameMetadata
 
-PLAY_AGAIN_HINT = "Mau main lagi? Tinggal tap: /game"
+PLAY_AGAIN_HINT = "Mau main lagi? Tinggal tap: /game\nCek skor kamu: /skor"
 
 
 def render_lobby_text(

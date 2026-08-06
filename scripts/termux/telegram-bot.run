@@ -1,0 +1,6 @@
+#!/data/data/com.termux/files/usr/bin/sh
+# Service runit -- lihat docs/termux-deployment-guide.md langkah 5.
+# Dipasang via symlink ke $PREFIX/var/service/telegram-bot/run.
+APP_DIR="$HOME/apps/telegram-multibot"
+cd "$APP_DIR"
+exec "$APP_DIR/.venv/bin/python" -m app.main 2>&1

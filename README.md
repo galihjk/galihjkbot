@@ -33,12 +33,14 @@ app/
 ├── services/                  health, dashboard, permission
 └── modules/
     ├── common/                /start /help
-    ├── admin/                 dashboard, users, groups, health (private chat only)
+    ├── admin/                 dashboard, users, groups, health, monitoring game (private chat only)
     ├── devtools/               /p0-/p7 — impersonasi admin jadi virtual player (testing solo)
-    └── games/                  engine generik (lobby/ready-check/timer/lock) + implementations/simple_game (game "Test")
+    ├── games/                  engine generik (lobby/ready-check/timer/lock) + implementations/kursi_kosong (game pertama) + simple_game (game "Test", frozen)
+    └── leaderboard/            /skor, /leaderboard, /leaderboardgrup + job bulanan (umumkan+reset skor, bersihkan data tidak aktif)
 
 migrations/     Alembic
 docs/           semua dokumentasi project (lihat di bawah)
+scripts/termux/ Script deployment ke Termux (install/service/deploy/backup)
 archive/        Blueprint.docx & GAME DESIGN docx asli (gitignored, sudah ditranskrip ke docs/)
 ```
 
@@ -52,6 +54,7 @@ archive/        Blueprint.docx & GAME DESIGN docx asli (gitignored, sudah ditran
 | [`game-design-kursi-kosong.md`](docs/game-design-kursi-kosong.md) | Spesifikasi desain game pertama yang sesungguhnya (belum diimplementasikan) | Mau kerja di Kursi Kosong |
 | [`kursi-kosong-implementation-plan.md`](docs/kursi-kosong-implementation-plan.md) | Rencana 6 tahap membangun Kursi Kosong | Mau mulai/lanjut implementasi Kursi Kosong |
 | [`blueprint.md`](docs/blueprint.md) | Transkrip lengkap blueprint arsitektur original (39 bagian) | Butuh rujukan desain awal / alasan arsitektur |
+| [`termux-deployment-guide.md`](docs/termux-deployment-guide.md) | Panduan langkah-demi-langkah deploy ke Android TV Box via Termux | Mau deploy/update bot di device produksi |
 
 ## Catatan Penting
 
@@ -60,3 +63,4 @@ archive/        Blueprint.docx & GAME DESIGN docx asli (gitignored, sudah ditran
 - Database `data/bot.db` — **jangan pindah ke shared storage** kalau nanti deploy ke Termux (WAL mode butuh filesystem lokal, lihat `blueprint.md` §28 & histori diskusi soal ini).
 - Belum ada test suite formal — verifikasi selama ini pakai integration test ad-hoc (SQLite file asli + `FakeBot` + `asyncio.gather` untuk uji konkurensi), ditulis di scratchpad, tidak disimpan di repo. Pola contohnya ada di `docs/game-development-guide.md` §12.
 - Modul `games/implementations/simple_game` ("Test" di UI) **frozen**, jangan dikembangkan — cuma buat uji engine, disembunyikan otomatis saat `APP_ENV=production`.
+- **Leaderboard bulanan bersifat DESTRUKTIF secara sengaja** (dikonfirmasi user, lihat `development-history.md`): tiap tanggal 1, `user_game_scores` bulan itu diumumkan lalu **dihapus fisik** (tidak ada riwayat all-time), DAN `User`/`Group` yang tidak aktif >6 bulan ikut dihapus (grup CASCADE menghapus seluruh riwayat game-nya). Jangan "perbaiki" ini jadi soft-delete tanpa tanya user dulu — ini keputusan produk, bukan bug.

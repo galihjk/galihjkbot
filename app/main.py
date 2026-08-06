@@ -9,6 +9,7 @@ from app.core.config import BASE_DIR, get_settings
 from app.core.logging import setup_logging
 from app.database.session import create_engine, create_session_factory
 from app.modules.games.engine.manager import GameManager
+from app.modules.leaderboard.scheduler import run_forever as run_leaderboard_scheduler
 from app.utils.datetime import utcnow
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,9 @@ async def main() -> None:
         settings.app_env,
     )
 
+    leaderboard_task = asyncio.create_task(
+        run_leaderboard_scheduler(bot, session_factory, settings)
+    )
     try:
         async with bot:
             await bot.delete_webhook(
@@ -45,6 +49,7 @@ async def main() -> None:
             await _notify_superadmins_startup(bot, settings)
             await dispatcher.start_polling(bot)
     finally:
+        leaderboard_task.cancel()
         await engine.dispose()
 
 

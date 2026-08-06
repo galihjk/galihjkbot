@@ -4,6 +4,7 @@ from app.database.models.game_player import GamePlayer
 from app.database.models.game_session import GameSession
 from app.database.models.group import Group
 from app.database.models.group_member import GroupMember
+from app.database.models.monthly_maintenance_run import MonthlyMaintenanceRun
 from app.database.models.user import User
 from app.database.models.user_game_score import UserGameScore
 
@@ -16,4 +17,5 @@ __all__ = [
     "GamePlayer",
     "GameEvent",
     "UserGameScore",
+    "MonthlyMaintenanceRun",
 ]

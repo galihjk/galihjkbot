@@ -14,6 +14,7 @@ from app.middlewares.user_tracking import UserTrackingMiddleware
 from app.modules.admin.router import get_router as get_admin_router
 from app.modules.common.router import get_router as get_common_router
 from app.modules.devtools.router import get_router as get_devtools_router
+from app.modules.leaderboard.router import get_router as get_leaderboard_router
 from app.modules.games.engine.manager import GameManager
 from app.modules.games.engine.registry import GameRegistry
 from app.modules.games.implementations.kursi_kosong.game import KursiKosongGame
@@ -59,6 +60,7 @@ def register_modules(dispatcher: Dispatcher) -> None:
     dispatcher.include_router(get_admin_router())
     dispatcher.include_router(get_games_router())
     dispatcher.include_router(get_devtools_router())
+    dispatcher.include_router(get_leaderboard_router())
 
 
 def build_dispatcher(

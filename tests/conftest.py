@@ -8,7 +8,10 @@ import pytest
 import pytest_asyncio
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
+from aiogram import Dispatcher
+
 import app.database.models  # noqa: F401  (registra semua model ke Base.metadata)
+from app.bootstrap import register_modules
 from app.database.base import Base
 from app.database.repositories import group_repository, user_repository
 from app.database.sqlite import register_sqlite_pragmas
@@ -16,6 +19,19 @@ from app.modules.games.callbacks import GameCallback
 from app.modules.games.engine.manager import GameManager
 from app.modules.games.engine.registry import GameRegistry
 from app.modules.games.private_input import clear_all_private_inputs
+
+
+@pytest.fixture(scope="session")
+def registered_dispatcher() -> Dispatcher:
+    """Router modul (`router = Router(name=...)`) adalah singleton level-modul
+    -- `register_modules()` cuma bisa dipanggil SEKALI per proses (aiogram
+    melarang router yang sama di-attach dua kali, `RuntimeError: Router is
+    already attached`). Test yang perlu memverifikasi URUTAN registrasi
+    router WAJIB pakai fixture ini, jangan panggil `register_modules()`
+    sendiri-sendiri."""
+    dispatcher = Dispatcher()
+    register_modules(dispatcher)
+    return dispatcher
 
 
 @pytest.fixture(autouse=True)

@@ -141,6 +141,13 @@ def test_single_button_extracted():
     assert result.buttons[0].url == "https://example.com"
 
 
+def test_button_without_scheme_defaults_to_http():
+    result = renderer.render(
+        "<b>Info</b>\n(btn=t.me/galihjkdev)Buka Situs(/btn)", _ctx()
+    )
+    assert result.buttons[0].url == "http://t.me/galihjkdev"
+
+
 def test_multiple_buttons_preserve_order():
     template = (
         "(btn=https://a.example)A(/btn)"
@@ -149,6 +156,23 @@ def test_multiple_buttons_preserve_order():
     result = renderer.render(template, _ctx())
     assert [b.label for b in result.buttons] == ["A", "B"]
     assert [b.url for b in result.buttons] == ["https://a.example", "https://b.example"]
+
+
+def test_render_handles_contained_different_tag_types_correctly():
+    # End-to-end untuk pola resmi Lampiran B.4: (obj!=sbj) di dalam
+    # (isreply) harus benar-benar RENDER dengan benar, tidak cuma lolos
+    # validasi struktur.
+    template = (
+        "(isreply)(sbj_dpn) memilih "
+        "(obj=sbj_as_dirinya sendiri)(obj!=sbj)(obj_dpn)(/obj!=sbj).(/isreply)"
+    )
+    same_user = TemplateUser(id=1, first_name="Budi", last_name="", username="")
+    result = renderer.render(template, _ctx(object=same_user, has_reply=True))
+    assert result.text == "Budi memilih dirinya sendiri."
+
+    other_user = TemplateUser(id=2, first_name="Rani", last_name="", username="")
+    result = renderer.render(template, _ctx(object=other_user, has_reply=True))
+    assert result.text == "Budi memilih Rani."
 
 
 def test_output_too_long_raises():
@@ -170,16 +194,48 @@ def test_validate_detects_unbalanced_tag():
     assert any("tidak seimbang" in e for e in errors)
 
 
-def test_validate_detects_nested_tags():
-    template = "(isreply)a(ada_ket)b(/isreply)c(/ada_ket)"
+def test_validate_detects_same_tag_nested_in_itself():
+    # (isreply) di dalam (isreply) lain -- ini yang benar-benar merusak
+    # regex non-greedy per pass (§10.11), BUKAN tag beda jenis yang saling
+    # mengandung.
+    template = "(isreply)a(isreply)b(/isreply)c(/isreply)"
     errors = validate_template_structure(template)
     assert any("bersarang" in e for e in errors)
+
+
+def test_validate_allows_different_tag_types_contained_within_each_other():
+    # Pola resmi Lampiran B.4 desain: (obj!=sbj) sepenuhnya di dalam
+    # (isreply) -- ini BUKAN nesting yang dilarang, karena tiap jenis tag
+    # diproses lewat pass regex sendiri yang independen.
+    template = (
+        "(isreply)(sbj_dpn) memilih "
+        "(obj=sbj_as_dirinya sendiri)(obj!=sbj)(obj_dpn)(/obj!=sbj).(/isreply)"
+    )
+    assert validate_template_structure(template) == []
+
+
+def test_validate_allows_sequential_same_tag_pairs():
+    # Dua pasang (ada_ket)...(/ada_ket) yang SIBLING (berurutan, tidak
+    # bersarang) -- pola nyata dari Sheet produksi (cabang isreply/
+    # isnotreply masing-masing punya blok ada_ket/tdk_ada_ket sendiri).
+    template = (
+        "(isreply)(ada_ket)a(/ada_ket)(tdk_ada_ket)b(/tdk_ada_ket)(/isreply)"
+        "(isnotreply)(ada_ket)c(/ada_ket)(tdk_ada_ket)d(/tdk_ada_ket)(/isnotreply)"
+    )
+    assert validate_template_structure(template) == []
 
 
 def test_validate_button_url_scheme():
     template = "(btn=ftp://example.com)Label(/btn)teks"
     errors = validate_template_structure(template)
     assert any("harus berskema" in e for e in errors)
+
+
+def test_validate_button_without_scheme_defaults_to_http_and_passes():
+    # §10.10 (diubah): URL tanpa scheme sama sekali otomatis dianggap
+    # http, BUKAN error -- admin Sheet tidak perlu ingat menulis https://.
+    template = "Halo (btn=t.me/galihjkdev)lihat channel(/btn)"
+    assert validate_template_structure(template) == []
 
 
 def test_validate_button_label_not_empty():

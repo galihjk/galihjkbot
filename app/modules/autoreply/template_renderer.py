@@ -146,7 +146,7 @@ class MsgCmdTemplateRenderer:
         buttons: list[ParsedButton] = []
 
         def _extract_button(match: re.Match[str]) -> str:
-            url = match.group(1).strip()
+            url = _normalize_button_url(match.group(1).strip())
             label = match.group(2).strip()
             buttons.append(ParsedButton(label=label, url=url))
             return ""
@@ -175,6 +175,17 @@ def _render_mention(user, label: str) -> str:  # noqa: ANN001
     return f'<a href="tg://user?id={user.id}">{html.escape(label, quote=True)}</a>'
 
 
+def _normalize_button_url(url: str) -> str:
+    """§10.10 -- URL tombol tanpa scheme sama sekali (tidak ada `://`)
+    otomatis dianggap `http`, BUKAN error, supaya admin Sheet tidak perlu
+    ingat menulis `https://` tiap kali. Scheme yang ditulis eksplisit tapi
+    tidak diizinkan (mis. `ftp://`) tetap ditolak seperti biasa -- default
+    ini cuma berlaku kalau memang tidak ada scheme sama sekali."""
+    if "://" in url:
+        return url
+    return f"http://{url}"
+
+
 def validate_template_structure(template: str) -> list[str]:
     """Validasi statis saat sync (§10.11 langkah 8 + §9.3): pasangan tag
     seimbang & tidak nested, URL tombol valid, dan teks tidak kosong setelah
@@ -195,11 +206,11 @@ def validate_template_structure(template: str) -> list[str]:
 
     remaining = template
     for match in _BUTTON_RE.finditer(template):
-        url = match.group(1).strip()
+        url = _normalize_button_url(match.group(1).strip())
         label = match.group(2).strip()
         if not label:
             errors.append("Label tombol tidak boleh kosong.")
-        scheme = url.split(":", 1)[0].lower() if ":" in url else ""
+        scheme = url.split("://", 1)[0].lower()
         if scheme not in ALLOWED_BUTTON_SCHEMES:
             errors.append(
                 f"URL tombol '{url}' harus berskema {'/'.join(ALLOWED_BUTTON_SCHEMES)}."
@@ -218,26 +229,28 @@ def validate_template_structure(template: str) -> list[str]:
 
 
 def _has_nested_tags(template: str) -> bool:
-    """Deteksi tag pembuka jenis A yang muncul sebelum tag penutup jenis A
-    yang sedang terbuka ditutup, sementara tag jenis B (apa pun) dibuka DI
-    ANTARANYA -- pendekatan sederhana: untuk tiap jenis tag, ambil semua
-    span (pembuka..penutup) urut kemunculan; kalau ada span tag lain yang
-    dimulai strictly di dalam span tersebut, itu nested."""
-    spans: list[tuple[int, int]] = []
-    for tag in _ALL_PAIRED_TAGS:
-        open_re = re.compile(rf"\({re.escape(tag)}\)")
-        close_re = re.compile(rf"\(/{re.escape(tag)}\)")
-        opens = [m.start() for m in open_re.finditer(template)]
-        closes = [m.start() for m in close_re.finditer(template)]
-        for open_pos, close_pos in zip(opens, closes):
-            if open_pos < close_pos:
-                spans.append((open_pos, close_pos))
+    """Deteksi tag YANG SAMA bersarang di dalam dirinya sendiri, misal
+    `(isreply)a(isreply)b(/isreply)c(/isreply)`. Ini satu-satunya bentuk
+    nesting yang benar-benar merusak render: tiap jenis tag diproses lewat
+    satu regex `re.sub` non-greedy per pass (§10.11), jadi dua kemunculan
+    tag yang SAMA yang tidak bersarang (sibling/berurutan) tetap aman --
+    masing-masing tetap ketemu pasangan tutupnya sendiri secara berurutan.
 
-    spans.sort()
-    for i, (start_a, end_a) in enumerate(spans):
-        for start_b, end_b in spans[i + 1 :]:
-            if start_b < end_a and start_b > start_a and end_b <= end_a:
-                return True
-            if start_b < end_a and end_b > end_a:
-                return True
+    Tag jenis BERBEDA yang tumpang tindih (mis. `(obj!=sbj)` di dalam
+    `(isreply)`, seperti contoh resmi Lampiran B.4 desain) BUKAN nesting
+    yang dilarang -- tiap jenis tag punya pass regex sendiri yang berjalan
+    independen, jadi tidak ada ambiguitas."""
+    for tag in _ALL_PAIRED_TAGS:
+        open_re = rf"\({re.escape(tag)}\)"
+        close_re = rf"\(/{re.escape(tag)}\)"
+        token_re = re.compile(rf"{open_re}|{close_re}")
+        depth = 0
+        is_open_re = re.compile(open_re)
+        for match in token_re.finditer(template):
+            if is_open_re.fullmatch(match.group(0)):
+                depth += 1
+                if depth > 1:
+                    return True
+            else:
+                depth -= 1
     return False

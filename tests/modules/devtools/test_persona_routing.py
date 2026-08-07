@@ -3,12 +3,10 @@ from __future__ import annotations
 from datetime import datetime
 from types import SimpleNamespace
 
-from aiogram import Dispatcher
 from aiogram.types import Chat
 from aiogram.types import Message as AiogramMessage
 from aiogram.types import User as TgUser
 
-from app.bootstrap import register_modules
 from app.modules.devtools.router import get_router as get_devtools_router
 from app.modules.games.private_input import register_private_input
 from app.modules.games.router import get_router as get_games_router
@@ -57,15 +55,12 @@ async def test_games_private_bridge_would_also_match_pending_context():
     assert matched is True
 
 
-def test_devtools_router_registered_before_games_router():
+def test_devtools_router_registered_before_games_router(registered_dispatcher):
     """Bukti bahwa perbaikan urutan `register_modules()` benar-benar berlaku:
     aiogram memilih match PERTAMA berdasarkan urutan `include_router()`
     (sub-router dicoba berurutan, berhenti di non-UNHANDLED pertama) -- jadi
     urutan register di sini adalah satu-satunya hal yang mencegah command
     persona "ditelan" oleh handler pesan privat generik games (lihat dua
     test di atas: keduanya SAMA-SAMA cocok untuk skenario yang sama)."""
-    dispatcher = Dispatcher()
-    register_modules(dispatcher)
-
-    router_names = [router.name for router in dispatcher.sub_routers]
+    router_names = [router.name for router in registered_dispatcher.sub_routers]
     assert router_names.index("devtools") < router_names.index("games")

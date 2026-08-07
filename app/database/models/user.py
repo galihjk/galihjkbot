@@ -22,6 +22,9 @@ class User(Base, TimestampMixin):
     display_name: Mapped[str | None] = mapped_column(String(255))
     language_code: Mapped[str | None] = mapped_column(String(8))
     is_bot: Mapped[bool] = mapped_column(default=False, nullable=False)
+    is_leaderboard_channel_subscribed: Mapped[bool] = mapped_column(
+        default=False, nullable=False
+    )
     status: Mapped[str] = mapped_column(
         String(16), default=UserStatus.ACTIVE.value, nullable=False
     )

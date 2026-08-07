@@ -35,6 +35,20 @@ def format_own_score(
     return "\n".join(lines)
 
 
+def format_subscription_notice(is_subscribed: bool, channel_link: str | None) -> str:
+    """Notice status subscribe channel leaderboard, ditempel di balasan
+    `/skor` -- cuma leaderboard GLOBAL (channel + `/leaderboard`) yang
+    disyaratkan subscribe, leaderboard grup tidak terpengaruh sama sekali."""
+    if is_subscribed:
+        return "✅ Kamu sudah subscribe channel leaderboard -- skor kamu ikut masuk leaderboard global bulanan."
+    where = escape(channel_link) if channel_link else "channel leaderboard resmi"
+    return (
+        "🔔 Kamu belum subscribe channel leaderboard, jadi skor kamu BELUM ikut "
+        f"masuk leaderboard global bulanan (leaderboard grup tetap jalan seperti biasa).\n"
+        f"Subscribe dulu di {where}, lalu cek lagi pakai /skor."
+    )
+
+
 def format_global_leaderboard(rows: list[tuple[User, int]]) -> list[str]:
     """Leaderboard GLOBAL antar-user, TANPA mention/link (dikonfirmasi user
     -- versi ini dipakai buat pengumuman channel, bukan pesan dalam grup)."""

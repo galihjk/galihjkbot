@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database.models.administrator import Administrator
@@ -57,6 +57,39 @@ async def sum_global_scores_by_user(
         .order_by(total.desc())
     )
     return [(row[0], row[1]) for row in result.all()]
+
+
+async def sum_global_scores_by_user_subscribed(
+    session: AsyncSession, start: datetime, end: datetime
+) -> list[tuple[User, int]]:
+    """Sama seperti `sum_global_scores_by_user`, tapi cuma user dengan cache
+    `is_leaderboard_channel_subscribed=True` -- dipakai `/leaderboard` on-demand
+    supaya konsisten dengan pengumuman channel bulanan (yang cuma memuat
+    subscriber). Job bulanan sendiri TIDAK memakai fungsi ini -- dia re-verify
+    live lalu memfilter sendiri dari hasil `sum_global_scores_by_user` mentah."""
+    total = func.sum(UserGameScore.final_score).label("total")
+    result = await session.execute(
+        select(User, total)
+        .join(User, User.id == UserGameScore.user_id)
+        .where(
+            UserGameScore.committed_at >= start,
+            UserGameScore.committed_at < end,
+            User.is_leaderboard_channel_subscribed.is_(True),
+        )
+        .group_by(User.id)
+        .order_by(total.desc())
+    )
+    return [(row[0], row[1]) for row in result.all()]
+
+
+async def set_channel_subscription(
+    session: AsyncSession, user_id: int, is_subscribed: bool
+) -> None:
+    await session.execute(
+        update(User)
+        .where(User.id == user_id)
+        .values(is_leaderboard_channel_subscribed=is_subscribed)
+    )
 
 
 async def sum_group_scores_by_user(

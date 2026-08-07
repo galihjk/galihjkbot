@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.enums import AdminRole
 from app.core.exceptions import ActiveGameExistsError, GameNotFoundError, InvalidGameStateError
+from app.core.maintenance import MAINTENANCE_NOTICE, MaintenanceGate
 from app.database.models.group import Group
 from app.database.models.user import User
 from app.database.repositories.game_repository import count_active_players, find_active_by_group
@@ -38,7 +39,12 @@ async def handle_game_command(
     db_session: AsyncSession,
     current_user: User,
     current_group: Group,
+    maintenance_gate: MaintenanceGate,
 ) -> None:
+    if maintenance_gate.active:
+        await message.answer(MAINTENANCE_NOTICE)
+        return
+
     game_key = (command.args or "").strip()
 
     if not game_key:
@@ -73,7 +79,12 @@ async def handle_game_menu_selection(
     db_session: AsyncSession,
     current_user: User,
     current_group: Group,
+    maintenance_gate: MaintenanceGate,
 ) -> None:
+    if maintenance_gate.active:
+        await callback.answer(MAINTENANCE_NOTICE, show_alert=True)
+        return
+
     try:
         await game_manager.create_lobby(
             db_session,

@@ -55,6 +55,32 @@ pip install -r requirements.txt
 
 Build dari source lewat `rust`/`binutils` akan lebih lambat (beberapa menit), tapi seharusnya berhasil. Kalau tetap gagal, catat pesan error lengkapnya (biasanya nama paket yang gagal ada di baris paling atas traceback pip) untuk didiagnosis lebih lanjut.
 
+### ⚠️ Kalau `pkg install rust binutils` gagal dengan "No space left on device"
+
+Toolchain `rust` di Termux ukurannya besar (ratusan MB terinstall) — di Android TV Box yang storage internalnya kecil, ini bisa langsung menghabiskan sisa ruang saat proses unpack, biasanya error di tengah-tengah seperti:
+
+```
+cannot copy extracted data for '...rmeta' ... failed to write (No space left on device)
+```
+
+Langkah:
+
+```bash
+df -h "$HOME"          # cek sisa storage
+pkg clean              # hapus cache .deb yang sudah didownload
+pkg autoclean
+pkg install rust binutils   # ulangi
+```
+
+Kalau `pkg clean` saja tidak cukup dan storage device memang sangat terbatas, ada opsi menghindari instalasi Rust sama sekali: Termux memakai Android Bionic libc (bukan glibc), jadi wheel prebuilt resmi `pydantic-core` di PyPI (`manylinux`) tidak akan pernah cocok — ini sebabnya pip selalu jatuh ke build-from-source via Rust. Proyek pihak ketiga [`Eutalix/android-pydantic-core`](https://github.com/Eutalix/android-pydantic-core) menyediakan wheel `pydantic-core` prebuilt khusus Termux/Android (ARM64/ARMv7), jauh lebih kecil dan tidak butuh Rust:
+
+```bash
+pip install pydantic-core --extra-index-url https://eutalix.github.io/android-pydantic-core/
+pip install -r requirements.txt
+```
+
+**Catatan:** ini sumber pihak ketiga, bukan PyPI/pydantic resmi — pakai sesuai penilaian risiko sendiri. Kalau ragu, lebih aman bersihkan storage dan tetap build lewat `rust` resmi.
+
 ## 3. Isi konfigurasi (`.env`)
 
 Edit `.env` (`nano .env` atau `vi .env`):

@@ -7,6 +7,7 @@ from app.bootstrap import build_dispatcher, create_autoreply_runtime, create_gam
 from app.bot.factory import create_bot
 from app.core.config import BASE_DIR, get_settings
 from app.core.logging import setup_logging
+from app.core.maintenance import MaintenanceGate
 from app.database.session import create_engine, create_session_factory
 from app.modules.games.engine.manager import GameManager
 from app.modules.leaderboard.scheduler import run_forever as run_leaderboard_scheduler
@@ -26,6 +27,7 @@ async def main() -> None:
     game_registry = create_game_registry(settings)
     game_manager = GameManager(game_registry, session_factory, bot)
     autoreply_service, autoreply_sync_service = create_autoreply_runtime(settings, bot)
+    maintenance_gate = MaintenanceGate()
 
     dispatcher = build_dispatcher(
         session_factory,
@@ -37,6 +39,7 @@ async def main() -> None:
     )
     dispatcher["settings"] = settings
     dispatcher["started_at"] = utcnow()
+    dispatcher["maintenance_gate"] = maintenance_gate
 
     logger.info(
         "Starting %s v%s (%s)",
@@ -46,7 +49,7 @@ async def main() -> None:
     )
 
     leaderboard_task = asyncio.create_task(
-        run_leaderboard_scheduler(bot, session_factory, settings)
+        run_leaderboard_scheduler(bot, session_factory, settings, maintenance_gate)
     )
     try:
         async with bot:

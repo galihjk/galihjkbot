@@ -55,7 +55,7 @@ async def handle_group_detail(
 ) -> None:
     identifier = (command.args or "").strip()
     if not identifier or not identifier.lstrip("-").isdigit():
-        await message.answer("Gunakan: /group <chat_id>")
+        await message.answer("Gunakan: /group [chat_id]")
         return
 
     group = await find_by_telegram_chat_id(db_session, int(identifier))

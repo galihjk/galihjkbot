@@ -58,7 +58,7 @@ async def handle_user_detail(
 ) -> None:
     identifier = (command.args or "").strip()
     if not identifier:
-        await message.answer("Gunakan: /user <telegram_id|@username|U-000001>")
+        await message.answer("Gunakan: /user [telegram_id|@username|U-000001]")
         return
 
     internal_id = parse_user_code(identifier)

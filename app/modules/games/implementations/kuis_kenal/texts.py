@@ -96,6 +96,17 @@ def render_judging_started_public(subject: PlayerInfo) -> str:
     return f"✅ Semua jawaban sudah masuk. {mention(subject)} sedang menilai jawaban..."
 
 
+def render_judging_fallback_public(subject: PlayerInfo) -> str:
+    """Dipakai kalau bot GAGAL mengirim pesan penilaian langsung ke chat
+    privat subjek (mis. subjek adalah virtual player tanpa chat Telegram
+    asli) -- netral, tidak menyiratkan error, karena buat virtual player ini
+    justru jalur NORMAL setiap giliran."""
+    return (
+        f"🔍 Semua jawaban sudah masuk! {mention(subject)}, buka bot dan tekan "
+        "tombol di bawah untuk mulai menilai."
+    )
+
+
 def render_judging_intro(question_text: str) -> str:
     return (
         f"🔍 Semua jawaban sudah masuk untuk:\n\n<b>{escape(question_text)}</b>\n\n"
@@ -145,18 +156,43 @@ def render_scoreboard(rankings: list[tuple[PlayerInfo, int]]) -> str:
     return "\n".join(lines)
 
 
+_MEDALS = ("🥇", "🥈", "🥉")
+
+
+def render_final_leaderboard(entries: list[tuple[PlayerInfo, "scoring.PlayerScoreResult"]]) -> str:
+    """Skor AKHIR yang benar-benar dicatat ke leaderboard bulanan (§18
+    rencana) -- BUKAN skor internal sesi (jumlah jawaban benar, itu cuma
+    dipakai buat menentukan pemenang, lihat `render_final_result`).
+    Diurutkan `final_score` descending, medali untuk 3 teratas, baris AFK
+    wajib menyebut angka penalti eksplisit (pola sama seperti Kursi Kosong)."""
+    lines = ["📊 Perolehan Skor:"]
+    for index, (player, result) in enumerate(entries):
+        final = result.breakdown.final_score
+        if result.is_afk:
+            emoji = "💤"
+            suffix = f" (Penalti AFK {result.penalty} poin)"
+        else:
+            emoji = _MEDALS[index] if index < len(_MEDALS) else ""
+            suffix = ""
+        emoji_part = f"{emoji} " if emoji else ""
+        lines.append(f"{index + 1}. {emoji_part}{mention(player)}{suffix} — {final} poin")
+    return "\n".join(lines)
+
+
 def render_final_result(
-    rankings: list[tuple[PlayerInfo, int]], winner_ids: list[int]
+    winner_rankings: list[tuple[PlayerInfo, int]],
+    winner_ids: list[int],
+    leaderboard_entries: list[tuple[PlayerInfo, "scoring.PlayerScoreResult"]],
 ) -> str:
     lines = ["🏁 KUIS KENAL SELESAI!", ""]
     if len(winner_ids) == 1:
-        winner = next(p for p, _ in rankings if p.user_id == winner_ids[0])
+        winner = next(p for p, _ in winner_rankings if p.user_id == winner_ids[0])
         lines.append(f"🏆 {mention(winner)} menang!")
     elif winner_ids:
-        names = [mention(p) for p, _ in rankings if p.user_id in winner_ids]
+        names = [mention(p) for p, _ in winner_rankings if p.user_id in winner_ids]
         lines.append("🏆 Seri! Pemenang: " + ", ".join(names))
     lines.append("")
-    lines.append(render_scoreboard(rankings))
+    lines.append(render_final_leaderboard(leaderboard_entries))
     return "\n".join(lines)
 
 

@@ -296,6 +296,11 @@ def build_answer_groups(state: dict) -> dict:
     state["next_group_id"] = next_id
     state["phase"] = Phase.JUDGING.value
     state["phase_started_at"] = utcnow().isoformat()
+    # Nonce fase menilai -- baru digenerate di sini (bukan di begin_turn),
+    # mirip pola answer_nonce di select_question. Sempat lupa dibuat sama
+    # sekali sebelumnya, bikin deep link kk-j selalu ditolak "tidak berlaku"
+    # apa pun nonce yang dikirim (bandingannya selalu vs None).
+    state["judge_nonce"] = secrets.token_hex(4)
     _bump_message_version(state)
     return state
 

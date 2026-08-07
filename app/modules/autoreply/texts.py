@@ -5,7 +5,7 @@ FEATURE_DISABLED_GLOBAL = "⏸ Fitur autoreply dinonaktifkan secara global."
 GROUP_NOT_FOUND = "Grup tidak ditemukan. Bot harus pernah menerima pesan dari grup itu."
 GROUP_FEATURE_ENABLED = "✅ Autoreply diaktifkan untuk grup {chat_id}."
 GROUP_FEATURE_DISABLED = "⏸ Autoreply dinonaktifkan untuk grup {chat_id}."
-GROUP_COMMAND_USAGE = "Gunakan: /msgcmd_group <chat_id> on|off"
+GROUP_COMMAND_USAGE = "Gunakan: /msgcmd_group [chat_id] on|off"
 NO_SYNC_YET = "Belum ada sinkronisasi yang tercatat."
 TO_MSGCMD_NO_REPLY = (
     "Balas sebuah voice, document, photo, video, audio, atau sticker dengan /to_msgcmd."
@@ -37,8 +37,8 @@ Tombol URL:
   Skema diizinkan: https, http, tg. Label tidak boleh kosong.
 
 Media (kolom Message diawali prefix ini, tanpa placeholder di dalamnya):
-  *voice:<file_id>  *document:<file_id>  *photo:<file_id>
-  *video:<file_id>  *audio:<file_id>     *sticker:<file_id>
+  *voice:[file_id]  *document:[file_id]  *photo:[file_id]
+  *video:[file_id]  *audio:[file_id]     *sticker:[file_id]
 
 Kolom wajib di Sheet: Command, Message, MatchAll, ReplyToSender,
 ReplyToReplied, AdminOnly, Disabled (TRUE/FALSE/kosong)."""

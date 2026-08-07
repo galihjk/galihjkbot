@@ -257,6 +257,22 @@ Normalisasi hanya untuk pengelompokan, bukan penentuan otomatis:
 
 Sistem tidak menentukan benar/salah berdasarkan kemiripan string. Keputusan tetap milik pemain aktif.
 
+**Fallback pengiriman privat (susulan, ditemukan lewat pengujian virtual player):**
+Dorongan pesan privat langsung (poin 3) bisa gagal -- bukan cuma kegagalan
+jaringan acak, tapi PASTI gagal kalau pemain aktifnya adalah virtual player
+(diperankan admin lewat `/p0`-`/p7`, punya `telegram_user_id` palsu tanpa chat
+Telegram asli di baliknya). Kalau dorongan langsung gagal, sistem TIDAK
+langsung membatalkan giliran (§7.3) -- sebagai gantinya, kirim pesan ke GRUP
+(pakai pointer `public_message_id` yang sama seperti fase pilih-soal/jawab)
+berisi tombol deep link `kk-j-...` (purpose `judge`) yang sudah divalidasi
+lewat mekanisme yang sama seperti `kk-q`/`kk-a`. Timer menilai tetap
+dijadwalkan seperti biasa setelah itu. Baru kalau pengiriman fallback INI JUGA
+gagal (kegagalan ganda, jarang) giliran dibatalkan seperti §7.3. Ini juga
+memperbaiki bug nyata yang ditemukan bareng: `judge_nonce` sempat tidak pernah
+digenerate sama sekali (selalu `None`), jadi deep link `kk-j` sebelumnya selalu
+ditolak "tidak berlaku" apa pun yang terjadi -- sekarang digenerate saat fase
+masuk `judging` (mirip `answer_nonce` saat masuk `answering`).
+
 ### 5.6 Hasil giliran
 
 Setelah penilaian selesai:
@@ -920,6 +936,21 @@ Pemenang:
 - Jika beberapa pemain seri, `winner_user_id=None` dan simpan seluruh pemenang pada `payload["winner_user_ids"]`.
 
 Tidak ada tie-breaker pada versi pertama.
+
+**Catatan implementasi (susulan, ditemukan lewat uji manual pertama):** skor
+internal ini (jumlah jawaban benar) HANYA dipakai untuk menentukan pemenang
+(baris "🏆 ... menang!"). Ini SENGAJA angka yang BEDA dari skor leaderboard
+(§18) yang ditampilkan di tabel "📊 Perolehan Skor" pada pesan hasil akhir —
+skor internal murni soal menang/kalah trivia, skor leaderboard menghargai
+partisipasi & ketahanan juga, bukan cuma jumlah benar. Bug pertama yang
+ditemukan: pesan hasil akhir sempat memakai ulang render skor ANTAR-RONDE
+(berlabel "📊 Skor sementara", skor internal) padahal seharusnya sudah final
+dan seharusnya menampilkan skor LEADERBOARD (§18), bukan skor internal.
+Diperbaiki dengan fungsi render terpisah (`render_final_leaderboard`) yang
+sumber datanya sama persis dengan yang di-commit ke `user_game_scores`
+(`scoring.compute_scores()`, satu fungsi dipakai baik untuk render pesan
+maupun commit skor) — supaya angka yang dilihat pemain tidak pernah beda dari
+yang benar-benar tercatat.
 
 ## 18. Skor leaderboard bulanan
 

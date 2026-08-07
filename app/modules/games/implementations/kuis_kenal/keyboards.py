@@ -49,6 +49,21 @@ def build_group_answer_link(
     )
 
 
+def build_group_judge_link(
+    bot_username: str, session_id: int, round_number: int, nonce: str
+) -> InlineKeyboardMarkup:
+    payload = build_deep_link_payload("judge", session_id, round_number, nonce)
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🔍 Periksa Jawaban", url=_deep_link_url(bot_username, payload)
+                )
+            ]
+        ]
+    )
+
+
 def build_private_question_keyboard(
     session_id: int,
     round_number: int,

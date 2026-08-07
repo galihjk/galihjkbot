@@ -7,16 +7,19 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.enums import AdminRole
 from app.database.models.user import User
 from app.database.repositories.user_repository import get_or_create_virtual_player
-from app.filters.group_only import GroupOnly
 from app.middlewares.persona import PersonaMiddleware
 from app.modules.devtools.router import router
 
 MAX_PERSONA = 7
 
 
-@router.message(
-    GroupOnly(), Command(*(f"p{i}" for i in range(MAX_PERSONA + 1)))
-)
+# Sengaja TIDAK GroupOnly() -- persona disimpan per (chat_id, real_telegram_id)
+# (lihat PersonaMiddleware), jadi admin butuh bisa switch persona di chat
+# PRIVATnya sendiri juga supaya bisa uji game yang butuh interaksi DM (mis.
+# Kuis Kenal) lewat /p1../p7, bukan cuma di grup. Telegram cuma kasih SATU
+# chat privat per akun asli ke bot, jadi persona di sana dipakai bergantian
+# (switch, lakukan aksi, switch lagi), bukan paralel.
+@router.message(Command(*(f"p{i}" for i in range(MAX_PERSONA + 1))))
 async def handle_persona_switch(
     message: Message,
     command: CommandObject,

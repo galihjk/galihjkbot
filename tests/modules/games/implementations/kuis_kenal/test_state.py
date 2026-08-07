@@ -152,6 +152,23 @@ def test_finalize_answering_marks_missed_and_builds_groups():
     assert state["answer_groups"][0]["user_ids"] == [answered_uid]
 
 
+def test_build_answer_groups_generates_judge_nonce():
+    # Regresi: judge_nonce sempat tidak pernah digenerate sama sekali (selalu
+    # None), bikin deep link kk-j selalu ditolak "tidak berlaku" apa pun
+    # nonce yang dikirim.
+    state = build_state(3)
+    s.begin_turn(state)
+    assert state["judge_nonce"] is None
+
+    answerers = s.expected_answerer_ids(state)
+    s.store_answer_draft(state, answerers[0], "jawaban")
+    s.confirm_answer(state, answerers[0])
+    s.finalize_answering(state)
+
+    assert isinstance(state["judge_nonce"], str)
+    assert state["judge_nonce"]
+
+
 def test_build_answer_groups_groups_by_normalized_text():
     state = build_state(4)
     s.begin_turn(state)

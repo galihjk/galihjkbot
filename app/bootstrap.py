@@ -99,8 +99,16 @@ def register_middlewares(
 def register_modules(dispatcher: Dispatcher) -> None:
     dispatcher.include_router(get_common_router())
     dispatcher.include_router(get_admin_router())
-    dispatcher.include_router(get_games_router())
+    # devtools SEBELUM games: /p0../p7 (persona switch) harus dapat giliran
+    # cek lebih dulu daripada handler pesan privat generik milik games
+    # (`handle_private_game_message`), yang menangkap SEMUA pesan privat
+    # (termasuk command) selama pengirim punya konteks input privat aktif --
+    # kalau urutannya kebalik, admin yang sedang berperan sebagai virtual
+    # player dengan konteks jawab/nilai aktif tidak akan pernah bisa ketik
+    # /pN buat ganti persona (perintahnya keburu "ditelan" game). Diuji di
+    # tests/modules/devtools/test_persona_routing.py.
     dispatcher.include_router(get_devtools_router())
+    dispatcher.include_router(get_games_router())
     dispatcher.include_router(get_leaderboard_router())
     dispatcher.include_router(get_autoreply_admin_router())
     # Fallback terakhir -- lihat §19 desain: tidak boleh mengambil update

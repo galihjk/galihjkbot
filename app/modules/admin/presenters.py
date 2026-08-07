@@ -1,14 +1,59 @@
 from __future__ import annotations
 
 from app.core.config import Settings
-from app.core.enums import GameStatus
+from app.core.enums import AdminRole, GameStatus
 from app.database.models.game_session import GameSession
 from app.database.models.group import Group
 from app.database.models.user import User
 from app.modules.games.engine.metadata import GameMetadata
 from app.services.dashboard_service import DashboardStats
+from app.services.permission_service import has_minimum_role
 from app.utils.datetime import humanize_relative
 from app.utils.pagination import Page
+
+_ROLE_LABELS = {
+    AdminRole.VIEWER: "Viewer",
+    AdminRole.OPERATOR: "Operator",
+    AdminRole.ADMIN: "Admin",
+    AdminRole.SUPERADMIN: "Superadmin",
+}
+
+# (usage, deskripsi, role minimum, hanya-private-chat)
+_ADMIN_COMMAND_CATALOG: list[tuple[str, list[tuple[str, str, AdminRole, bool]]]] = [
+    (
+        "🛠 Dashboard & Monitoring",
+        [
+            ("/admin, /dashboard", "Dashboard admin dengan tombol inline", AdminRole.VIEWER, True),
+            ("/health", "Status kesehatan bot", AdminRole.VIEWER, True),
+            ("/users [status] [page]", "Daftar pengguna", AdminRole.VIEWER, True),
+            ("/user [id|username]", "Detail satu pengguna", AdminRole.VIEWER, True),
+            ("/groups [status] [page]", "Daftar grup", AdminRole.VIEWER, True),
+            ("/group [chat_id]", "Detail satu grup", AdminRole.VIEWER, True),
+            ("/activegames", "Semua sesi game aktif lintas grup", AdminRole.VIEWER, True),
+            ("/gameinfo [session_id]", "Detail satu sesi game (aktif atau selesai)", AdminRole.VIEWER, True),
+        ],
+    ),
+    (
+        "🧪 Testing solo (khusus grup)",
+        [
+            ("/p0 - /p7", "Ganti persona jadi virtual player (p0 = kembali ke diri sendiri)", AdminRole.VIEWER, False),
+        ],
+    ),
+    (
+        "💬 Autoreply / MsgCmd",
+        [
+            ("/msgcmd", "Panel MsgCmd dengan tombol", AdminRole.VIEWER, True),
+            ("/msgcmd_status", "Status singkat MsgCmd", AdminRole.VIEWER, True),
+            ("/msgcmd_reload", "Sinkronisasi ulang rule dari Google Sheet", AdminRole.OPERATOR, True),
+            ("/msgcmd_group [chat_id] on|off", "Override aktif/nonaktif per grup", AdminRole.OPERATOR, True),
+            ("/to_msgcmd", "Ambil media code dari pesan yang dibalas", AdminRole.OPERATOR, False),
+            ("/msgcmd_enable", "Aktifkan autoreply secara global", AdminRole.ADMIN, True),
+            ("/msgcmd_disable", "Nonaktifkan autoreply secara global", AdminRole.ADMIN, True),
+            ("/format_msgcmd", "Dokumentasi format template MsgCmd", AdminRole.VIEWER, False),
+            ("/msgcmd_sync_errors", "Ringkasan error/warning sync terakhir", AdminRole.VIEWER, True),
+        ],
+    ),
+]
 
 _GAME_STATUS_LABELS = {
     GameStatus.CREATED.value: "Baru dibuat",
@@ -37,6 +82,8 @@ def format_dashboard(stats: DashboardStats, uptime: str, settings: Settings) -> 
         f"Pengguna tercatat : {stats.total_users}",
         f"Aktif 24 jam      : {stats.active_users_24h}",
         f"Grup tercatat     : {stats.total_groups}",
+        "",
+        "Ketik /adminhelp untuk daftar lengkap command admin.",
     ]
     return "\n".join(lines)
 
@@ -161,4 +208,29 @@ def format_group_detail(group: Group, member_count: int) -> str:
         f"Bot pertama aktif : {humanize_relative(group.bot_joined_at)}",
         f"Aktivitas terakhir: {humanize_relative(group.last_activity_at)}",
     ]
+    return "\n".join(lines)
+
+
+def format_admin_help(admin_role: AdminRole | None) -> str:
+    role_label = _ROLE_LABELS.get(admin_role, "-") if admin_role is not None else "-"
+    lines = [
+        "🛠 DAFTAR COMMAND ADMIN",
+        f"Role kamu: {role_label}",
+        "✅ = bisa dipakai role kamu sekarang, 🔒 = butuh role lebih tinggi",
+        "",
+    ]
+    for section_title, commands in _ADMIN_COMMAND_CATALOG:
+        lines.append(section_title)
+        for usage, description, minimum, private_only in commands:
+            mark = "✅" if has_minimum_role(admin_role, minimum) else "🔒"
+            scope = "" if private_only else " (bisa di grup)"
+            lines.append(
+                f"{mark} {usage} -- {description}{scope} [{_ROLE_LABELS[minimum]}]"
+            )
+        lines.append("")
+
+    lines.append(
+        "Kecuali disebut \"bisa di grup\", seluruh command di atas hanya berfungsi "
+        "di chat privat dengan bot."
+    )
     return "\n".join(lines)

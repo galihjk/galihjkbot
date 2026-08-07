@@ -59,11 +59,28 @@ class FakeBot:
         self.sent: list[FakeMessage] = []
         self.edits: list[dict] = []
         self.fail_next_edits = 0
+        # chat_id yang harus GAGAL TERUS kalau dikirimi pesan -- dipakai untuk
+        # mensimulasikan chat privat yang tidak nyata sama sekali (mis.
+        # telegram_user_id palsu milik virtual player).
+        self.fail_send_to: set[int] = set()
+        # chat_id yang gagal N kali dulu baru berhasil lagi -- dipakai untuk
+        # mensimulasikan kegagalan SEMENTARA (mis. blip jaringan) tanpa harus
+        # membuat chat itu rusak permanen buat sisa test.
+        self.fail_send_count: dict[int, int] = {}
 
     async def get_me(self):
         return SimpleNamespace(id=self.id, username="test_bot")
 
     async def send_message(self, chat_id, text, reply_markup=None, **kwargs) -> FakeMessage:
+        if chat_id in self.fail_send_to:
+            raise RuntimeError(f"simulated send failure to chat {chat_id}")
+        remaining = self.fail_send_count.get(chat_id)
+        if remaining is not None:
+            if remaining <= 1:
+                del self.fail_send_count[chat_id]
+            else:
+                self.fail_send_count[chat_id] = remaining - 1
+            raise RuntimeError(f"simulated transient send failure to chat {chat_id}")
         message = FakeMessage(self, chat_id, text, reply_markup)
         self.sent.append(message)
         return message

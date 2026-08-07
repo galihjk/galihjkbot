@@ -11,6 +11,7 @@ def get_router() -> Router:
         games,
         groups,
         health,
+        help,
         users,
     )
 

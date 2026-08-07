@@ -43,7 +43,7 @@ async def handle_game_info(
 ) -> None:
     identifier = (command.args or "").strip()
     if not identifier or not identifier.isdigit():
-        await message.answer("Gunakan: /gameinfo <session_id>")
+        await message.answer("Gunakan: /gameinfo [session_id]")
         return
 
     game_session = await find_by_id(db_session, int(identifier))

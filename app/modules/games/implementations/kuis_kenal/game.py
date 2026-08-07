@@ -19,7 +19,7 @@ from app.modules.games.engine.base_game import BaseGame
 from app.modules.games.engine.context import GameContext, PlayerInfo
 from app.modules.games.engine.result import GameResult
 from app.modules.games.engine.score import ScoreBreakdown
-from app.modules.games.implementations.kuis_kenal import keyboards, links, questions
+from app.modules.games.implementations.kuis_kenal import keyboards, links, questions, scoring
 from app.modules.games.implementations.kuis_kenal import state as game_state
 from app.modules.games.implementations.kuis_kenal import texts
 from app.modules.games.implementations.kuis_kenal.metadata import (
@@ -668,36 +668,62 @@ class KuisKenalGame(BaseGame):
             context.session_id, state["round"], state["message_version"], state["answer_groups"]
         )
 
+        # Jalur utama: dorong pesan penilaian LANGSUNG ke chat privat subjek
+        # (mereka pasti sudah pernah buka bot di giliran ini lewat deep link
+        # kk-q, jadi bot sudah boleh mengirim pesan privat ke mereka). Ini
+        # GAGAL SELALU untuk virtual player (telegram_user_id palsu, tidak
+        # ada chat asli di baliknya) -- fallback di bawah menutupi itu, dan
+        # sekaligus jadi jaring pengaman kalau pemain asli memblokir bot dsb.
         try:
             sent = await _call_with_retry(
                 lambda: context.bot.send_message(
                     subject.telegram_user_id, f"{intro}\n\n{body}", reply_markup=keyboard
                 )
             )
-        except Exception:
-            logger.exception(
-                "Gagal mengirim pesan penilaian privat, session %s", context.session_id
-            )
-            # Subjek tidak bisa dihubungi privat -- giliran tidak bisa dinilai,
-            # perlakukan seperti judge timeout (tanpa poin) supaya game tetap lanjut.
-            game_state.record_judge_timeout(state)
+            state["judging_message_id"] = sent.message_id
             _save_state(context.game_session, state)
             await context.db_session.commit()
-            await self._advance_or_finish(context, state)
-            return
 
-        state["judging_message_id"] = sent.message_id
-        _save_state(context.game_session, state)
-        await context.db_session.commit()
-
-        try:
-            await _call_with_retry(
-                lambda: context.bot.send_message(
-                    context.telegram_chat_id, texts.render_judging_started_public(subject)
+            try:
+                await _call_with_retry(
+                    lambda: context.bot.send_message(
+                        context.telegram_chat_id, texts.render_judging_started_public(subject)
+                    )
                 )
-            )
+            except Exception:
+                logger.exception(
+                    "Gagal mengirim pesan status penilaian, session %s", context.session_id
+                )
         except Exception:
-            logger.exception("Gagal mengirim pesan status penilaian, session %s", context.session_id)
+            logger.warning(
+                "Gagal mengirim pesan penilaian privat langsung ke subjek "
+                "(session %s) -- fallback ke deep link lewat pesan grup",
+                context.session_id,
+            )
+            try:
+                bot_username = await _get_bot_username(context.bot)
+                fallback_keyboard = keyboards.build_group_judge_link(
+                    bot_username, context.session_id, state["round"], state["judge_nonce"]
+                )
+                fallback_text = texts.render_judging_fallback_public(subject)
+                new_id = await _edit_or_send_new(
+                    context, context.telegram_chat_id, state.get("public_message_id"),
+                    fallback_text, fallback_keyboard,
+                )
+                state["public_message_id"] = new_id
+                _save_state(context.game_session, state)
+                await context.db_session.commit()
+            except Exception:
+                logger.exception(
+                    "Gagal mengirim fallback deep link penilaian, session %s -- "
+                    "giliran dibatalkan tanpa poin",
+                    context.session_id,
+                )
+                game_state.record_judge_timeout(state)
+                _save_state(context.game_session, state)
+                await context.db_session.commit()
+                await self._advance_or_finish(context, state)
+                return
 
         context.game_manager.schedule_turn_timeout(context.session_id, JUDGING_TIMEOUT_SECONDS)
 
@@ -902,7 +928,18 @@ class KuisKenalGame(BaseGame):
         rankings = self._build_rankings(context, state)
         winner_ids = payload["winner_user_ids"]
 
-        final_text = texts.render_final_result(rankings, winner_ids)
+        # Skor leaderboard AKHIR (bukan skor internal/jawaban benar dipakai
+        # cuma buat menentukan pemenang di atas) -- satu sumber kebenaran
+        # yang sama dengan `calculate_scores()` supaya angka yang ditampilkan
+        # ke pemain selalu sama persis dengan yang benar-benar dicommit.
+        score_results = scoring.compute_scores(state)
+        leaderboard_entries = sorted(
+            ((self._player(context, uid), res) for uid, res in score_results.items()),
+            key=lambda pair: pair[1].breakdown.final_score,
+            reverse=True,
+        )
+
+        final_text = texts.render_final_result(rankings, winner_ids, leaderboard_entries)
         try:
             await _call_with_retry(lambda: context.bot.send_message(context.telegram_chat_id, final_text))
         except Exception:
@@ -928,39 +965,15 @@ class KuisKenalGame(BaseGame):
         self, context: GameContext, result: GameResult
     ) -> dict[int, ScoreBreakdown]:
         state = context.game_session.state_json
-        afk_flags = game_state.calculate_afk_flags(state)
+        score_results = scoring.compute_scores(state)
         scores: dict[int, ScoreBreakdown] = {}
 
-        for uid in state["all_user_ids"]:
-            activity = state["activity"].get(str(uid), {})
-            is_afk = afk_flags.get(uid, False)
-
-            raw_survival = (
-                36 * activity.get("answers_confirmed", 0)
-                + 44 * activity.get("subject_turns_completed", 0)
-            )
-            raw_result = 36 * activity.get("correct_answers", 0)
-
-            if is_afk:
-                participation = 0
-                survival = raw_survival // 2
-                result_score = raw_result // 2
-            else:
-                participation = 10 if activity.get("valid_actions", 0) > 0 else 0
-                survival = raw_survival
-                result_score = raw_result
-
-            final_score = participation + survival + result_score
-            scores[uid] = ScoreBreakdown(
-                result_score=result_score,
-                participation_score=participation,
-                survival_score=survival,
-                final_score=final_score,
-            )
+        for uid, res in score_results.items():
+            scores[uid] = res.breakdown
 
             player = await find_player(context.db_session, context.session_id, uid)
             if player is not None:
-                if is_afk:
+                if res.is_afk:
                     player.status = GamePlayerStatus.AFK.value
                 elif uid == result.winner_user_id:
                     player.status = GamePlayerStatus.WINNER.value

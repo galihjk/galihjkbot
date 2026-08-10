@@ -17,7 +17,7 @@ fi
 
 echo "Install dependency..."
 "$APP_DIR/.venv/bin/pip" install --upgrade pip
-"$APP_DIR/.venv/bin/pip" install -r requirements.txt
+"$APP_DIR/.venv/bin/pip" install --no-cache-dir -r requirements.txt
 
 if [ ! -f ".env" ]; then
   echo "Menyalin .env.example -> .env ..."

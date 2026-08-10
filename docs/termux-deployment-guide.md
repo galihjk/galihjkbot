@@ -42,44 +42,77 @@ bash scripts/termux/install.sh
 
 `install.sh` otomatis membuat virtualenv, install `requirements.txt`, dan menyalin `.env.example` jadi `.env` kalau belum ada. **Idempotent** — aman dijalankan ulang kalau terputus di tengah.
 
-### ⚠️ Kalau `pip install` gagal build (paket Rust/C extension)
+### ⚠️ Storage internal Android TV Box kecil (< 1-2 GB bebas) — urutan yang disarankan
 
-`aiogram` menarik beberapa dependency yang punya extension bukan-Python-murni: `pydantic` v2 (lewat `pydantic-core`, ditulis Rust) dan `aiohttp` (lewat `multidict`/`frozenlist`/`yarl`, C extension). Kalau `pip` menemukan wheel prebuilt untuk `aarch64` (Android TV Box biasanya ARM64), instalasi akan instan. Kalau TIDAK ada wheel yang cocok, `pip` akan mencoba build dari source dan gagal kalau compiler belum ada. Solusi:
+`aiogram` menarik beberapa dependency yang punya extension bukan-Python-murni: `pydantic` v2 (lewat `pydantic-core`, ditulis Rust) dan `aiohttp` (lewat `multidict`/`frozenlist`/`yarl`, C extension). Termux memakai Android Bionic libc (bukan glibc), jadi wheel prebuilt resmi (`manylinux`) di PyPI tidak akan pernah cocok — `pip` selalu jatuh ke build-from-source, dan toolchain buat build itu (`rust`, ratusan MB terinstall) bisa langsung menghabiskan storage di TV box yang sisa ruangnya sudah tipis SEBELUM instalasi apa pun dimulai. Kalau device kamu termasuk kategori ini, jangan langsung `pkg install rust binutils` — ikuti urutan di bawah dari yang termurah dulu.
 
-(`tzdata` juga ada di `requirements.txt` sejak fitur leaderboard bulanan ditambahkan — ini paket data murni Python, TIDAK ada extension, tidak menambah risiko build apa pun, cuma memastikan `zoneinfo` selalu punya data zona waktu yang konsisten lintas platform.)
+(`tzdata` juga ada di `requirements.txt` sejak fitur leaderboard bulanan ditambahkan — ini paket data murni Python, TIDAK ada extension, tidak menambah risiko build apa pun.)
+
+**1. Bebaskan storage Android dulu, sebelum install apa pun.**
+
+```bash
+df -h "$HOME"
+```
+
+Kalau hasilnya < 1-2 GB, storage Android-nya sendiri (bukan cuma bagian Termux) kemungkinan sudah sesak. Cek di Settings > Storage / Apps TV box: clear cache aplikasi bawaan, uninstall/disable bloatware pre-installed yang tidak dipakai, hapus file OTA update yang sudah terpasang. Ini housekeeping Android biasa, sering jadi sumber ruang terbesar yang bisa direbut tanpa risiko apa pun.
+
+**2. Clone hemat + install tanpa cache pip.**
+
+```bash
+git clone --depth 1 <URL_REPOSITORY_KAMU> telegram-multibot   # skip histori git
+```
+
+`scripts/termux/install.sh` dan `scripts/termux/deploy.sh` sudah pakai `pip install --no-cache-dir` — pip secara default menyimpan cache wheel/sdist yang bisa nambah puluhan-ratusan MB peak usage pas install padahal begitu terpasang tidak dipakai lagi.
+
+**3. Skip Rust dari awal — jangan tunggu gagal dulu.**
+
+Untuk device dengan storage < 1-2 GB, langsung pakai wheel prebuilt `pydantic-core` SEBELUM coba `pkg install rust binutils` sama sekali — jangan habiskan storage buat toolchain yang kemungkinan besar gagal fit, baru ketahuan setelah storage sudah terpakai separuh jalan. Proyek pihak ketiga [`Eutalix/android-pydantic-core`](https://github.com/Eutalix/android-pydantic-core) menyediakan wheel `pydantic-core` prebuilt khusus Termux/Android (ARM64/ARMv7), jauh lebih kecil dan tidak butuh Rust:
+
+```bash
+pip install pydantic-core --extra-index-url https://eutalix.github.io/android-pydantic-core/
+bash scripts/termux/install.sh
+```
+
+**Catatan:** ini sumber pihak ketiga, bukan PyPI/pydantic resmi — pakai sesuai penilaian risiko sendiri. Kalau ragu, lebih aman bersihkan storage dan tetap build lewat `rust` resmi (langkah di bawah).
+
+**4. Kalau paket LAIN (bukan `pydantic-core`) juga gagal build.**
+
+`multidict`/`yarl`/`frozenlist` (dari `aiohttp`, ditarik `aiogram`) dan `greenlet` (dari `sqlalchemy[asyncio]`) punya masalah sama — wheel manylinux resmi tidak cocok di Bionic libc. Beda dari `pydantic-core`, ini cuma butuh C compiler, jauh lebih kecil dari Rust:
+
+```bash
+pkg install clang
+pip install --no-cache-dir -r requirements.txt
+```
+
+**5. Kalau masih perlu Rust juga** (jarang, tapi kalau wheel Eutalix di atas ternyata tidak cocok versi Python/arsitektur kamu):
 
 ```bash
 pkg install rust binutils
-pip install -r requirements.txt
 ```
 
-Build dari source lewat `rust`/`binutils` akan lebih lambat (beberapa menit), tapi seharusnya berhasil. Kalau tetap gagal, catat pesan error lengkapnya (biasanya nama paket yang gagal ada di baris paling atas traceback pip) untuk didiagnosis lebih lanjut.
-
-### ⚠️ Kalau `pkg install rust binutils` gagal dengan "No space left on device"
-
-Toolchain `rust` di Termux ukurannya besar (ratusan MB terinstall) — di Android TV Box yang storage internalnya kecil, ini bisa langsung menghabiskan sisa ruang saat proses unpack, biasanya error di tengah-tengah seperti:
-
-```
-cannot copy extracted data for '...rmeta' ... failed to write (No space left on device)
-```
-
-Langkah:
+Kalau ini gagal dengan "No space left on device" (biasanya error di tengah unpack seperti `cannot copy extracted data for '...rmeta' ... failed to write`):
 
 ```bash
-df -h "$HOME"          # cek sisa storage
-pkg clean              # hapus cache .deb yang sudah didownload
+pkg clean
 pkg autoclean
 pkg install rust binutils   # ulangi
 ```
 
-Kalau `pkg clean` saja tidak cukup dan storage device memang sangat terbatas, ada opsi menghindari instalasi Rust sama sekali: Termux memakai Android Bionic libc (bukan glibc), jadi wheel prebuilt resmi `pydantic-core` di PyPI (`manylinux`) tidak akan pernah cocok — ini sebabnya pip selalu jatuh ke build-from-source via Rust. Proyek pihak ketiga [`Eutalix/android-pydantic-core`](https://github.com/Eutalix/android-pydantic-core) menyediakan wheel `pydantic-core` prebuilt khusus Termux/Android (ARM64/ARMv7), jauh lebih kecil dan tidak butuh Rust:
+**6. Bersih-bersih rutin setelah install** (baik berhasil maupun gagal di tengah) — jangan cuma pas troubleshooting, cache ini balik numpuk tiap kali `deploy.sh` jalan `pip install` ulang:
 
 ```bash
-pip install pydantic-core --extra-index-url https://eutalix.github.io/android-pydantic-core/
-pip install -r requirements.txt
+pip cache purge
+pkg clean && pkg autoclean
+rm -rf ~/.cache/pip
 ```
 
-**Catatan:** ini sumber pihak ketiga, bukan PyPI/pydantic resmi — pakai sesuai penilaian risiko sendiri. Kalau ragu, lebih aman bersihkan storage dan tetap build lewat `rust` resmi.
+**7. Kalau semua di atas masih belum cukup — expand storage lewat Adoptable Storage.**
+
+Ini BEDA dari peringatan WAL di langkah 3 di atas (soal shared media storage `/sdcard/...`, filesystem FAT/exFAT tanpa POSIX locking yang benar). "Adoptable Storage" adalah fitur Android (Settings > Storage > pilih USB/microSD yang ditancapkan > "Format as internal" / "Set up as internal storage") yang memformat drive itu jadi filesystem asli (ext4/f2fs) dan digabung TRANSPARAN ke internal storage oleh OS — Termux melihatnya sebagai storage internal biasa (bukan shared storage), sehingga file locking WAL SQLite seharusnya tetap aman selama benar-benar "adopted" (bukan cuma dipasang sebagai storage USB shared biasa).
+
+- Syarat: TV box punya port USB/microSD, Android-nya tidak mem-disable fitur ini (sebagian OEM TV box murah menonaktifkan), device di-restart setelah setup.
+- Verifikasi setelah setup: `df -h "$HOME"` harus menunjukkan kapasitas baru yang jauh lebih besar — kalau tidak berubah, adoptable storage belum benar-benar aktif untuk partisi Termux, JANGAN lanjut instalasi (baca ulang langkah 3 di dokumen ini soal risiko WAL).
+- Ini butuh drive USB/SD fisik tambahan, dan format drive itu akan MENGHAPUS data di dalamnya. Tidak dijamin didukung semua firmware TV box — kalau device tidak mendukung, ini jalan buntu di device ini (bukan sesuatu yang dipaksakan lewat root).
 
 ## 3. Isi konfigurasi (`.env`)
 
@@ -173,7 +206,7 @@ crontab -e
 
 | Masalah | Kemungkinan sebab | Cek |
 |---|---|---|
-| `pip install` gagal build | Tidak ada wheel prebuilt utk arm64 | `pkg install rust binutils`, install ulang |
+| `pip install` gagal build | Tidak ada wheel prebuilt utk arm64/Bionic libc | Lihat bagian "Storage internal Android TV Box kecil" di atas — kalau storage terbatas, coba wheel Eutalix dulu sebelum `pkg install rust binutils` |
 | Bot tidak membalas `/start` | Service belum jalan / token salah | `sv status telegram-bot`, cek `logs/error.log` |
 | "database is locked" terus-menerus | DB di shared storage (WAL tidak didukung) | Pastikan `DATABASE_URL` kosong / mengarah ke `data/bot.db` di storage privat |
 | Bot mati sendiri setelah beberapa jam | Android mematikan proses Termux di background | Pastikan wakelock aktif + battery optimization "unrestricted" |

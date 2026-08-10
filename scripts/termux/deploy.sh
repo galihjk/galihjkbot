@@ -18,7 +18,7 @@ echo "Mengambil update dari git..."
 git pull --ff-only
 
 echo "Install dependency..."
-"$APP_DIR/.venv/bin/pip" install -r requirements.txt
+"$APP_DIR/.venv/bin/pip" install --no-cache-dir -r requirements.txt
 
 echo "Menjalankan migration..."
 "$APP_DIR/.venv/bin/python" -m alembic upgrade head
